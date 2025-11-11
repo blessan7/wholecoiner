@@ -1,11 +1,13 @@
 'use client';
 
-import { useState, useEffect, use, useRef } from 'react';
+import { useState, useEffect, use, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { usePrivy } from '@privy-io/react-auth';
 import Link from 'next/link';
 import InvestFlow from '@/components/InvestFlow';
 import TransactionHistory from '@/components/TransactionHistory';
+import UserProfileBadge from '@/components/UserProfileBadge';
+import { getWalletAddressFromPrivy } from '@/lib/user';
 
 export default function GoalProgressPage({ params }) {
   const router = useRouter();
@@ -50,20 +52,42 @@ export default function GoalProgressPage({ params }) {
     }
   };
 
-  // Get user avatar URL
-  const getAvatarUrl = () => {
-    if (user?.linkedAccounts && Array.isArray(user.linkedAccounts)) {
-      const googleAccount = user.linkedAccounts.find(
-        account => account.type === 'google_oauth'
-      );
-      if (googleAccount?.picture) {
-        return googleAccount.picture;
+  const avatarUrl = useMemo(() => {
+    if (!user?.linkedAccounts || !Array.isArray(user.linkedAccounts)) return null;
+    const googleAccount = user.linkedAccounts.find(
+      (account) => account.type === 'google_oauth'
+    );
+    return googleAccount?.picture ?? null;
+  }, [user?.linkedAccounts]);
+
+  const walletAddress = getWalletAddressFromPrivy(user);
+
+  const displayName = useMemo(() => {
+    if (user?.email?.address) {
+      const [namePart] = user.email.address.split('@');
+      if (namePart) {
+        return namePart.charAt(0).toUpperCase() + namePart.slice(1);
       }
     }
-    return null;
-  };
 
-  const avatarUrl = getAvatarUrl();
+    if (Array.isArray(user?.linkedAccounts)) {
+      const emailAccount = user.linkedAccounts.find(
+        (account) => account.type === 'email' && account.address
+      );
+      if (emailAccount?.address) {
+        const [namePart] = emailAccount.address.split('@');
+        if (namePart) {
+          return namePart.charAt(0).toUpperCase() + namePart.slice(1);
+        }
+      }
+    }
+
+    if (walletAddress) {
+      return walletAddress.slice(0, 6).toUpperCase();
+    }
+
+    return 'Wholecoiner';
+  }, [user?.email?.address, user?.linkedAccounts, walletAddress]);
 
   const formatDate = (dateString) => {
     if (!dateString) return 'N/A';
@@ -287,17 +311,14 @@ export default function GoalProgressPage({ params }) {
                 <span className="material-symbols-outlined text-xl">toggle_on</span>
               </button>
             </div>
-            {avatarUrl ? (
-              <div 
-                className="bg-center bg-no-repeat aspect-square bg-cover rounded-full size-10" 
-                data-alt="User avatar image" 
-                style={{ backgroundImage: `url("${avatarUrl}")` }}
-              ></div>
-            ) : (
-              <div className="bg-primary/20 rounded-full size-10 flex items-center justify-center text-primary font-bold text-sm">
-                {user?.email?.address?.[0]?.toUpperCase() || user?.linkedAccounts?.[0]?.address?.[0]?.toUpperCase() || 'U'}
-              </div>
-            )}
+            <UserProfileBadge
+              displayName={displayName}
+              walletAddress={walletAddress}
+              avatarUrl={avatarUrl}
+              size="sm"
+              orientation="horizontal"
+              className="bg-[#22160d] border-none shadow-none px-3 py-2"
+            />
           </div>
         </header>
 

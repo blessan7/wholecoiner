@@ -1,7 +1,11 @@
 'use client';
 
+import { useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import { usePrivy } from '@privy-io/react-auth';
 import TwoFASetup from '@/components/TwoFASetup';
+import UserProfileBadge from '@/components/UserProfileBadge';
+import { getWalletAddressFromPrivy } from '@/lib/user';
 
 /**
  * 2FA Setup Page
@@ -10,6 +14,44 @@ import TwoFASetup from '@/components/TwoFASetup';
  */
 export default function TwoFASetupPage() {
   const router = useRouter();
+  const { user } = usePrivy();
+
+  const avatarUrl = useMemo(() => {
+    if (!user?.linkedAccounts || !Array.isArray(user.linkedAccounts)) return null;
+    const googleAccount = user.linkedAccounts.find(
+      (account) => account.type === 'google_oauth'
+    );
+    return googleAccount?.picture ?? null;
+  }, [user?.linkedAccounts]);
+
+  const walletAddress = getWalletAddressFromPrivy(user);
+
+  const displayName = useMemo(() => {
+    if (user?.email?.address) {
+      const [namePart] = user.email.address.split('@');
+      if (namePart) {
+        return namePart.charAt(0).toUpperCase() + namePart.slice(1);
+      }
+    }
+
+    if (Array.isArray(user?.linkedAccounts)) {
+      const emailAccount = user.linkedAccounts.find(
+        (account) => account.type === 'email' && account.address
+      );
+      if (emailAccount?.address) {
+        const [namePart] = emailAccount.address.split('@');
+        if (namePart) {
+          return namePart.charAt(0).toUpperCase() + namePart.slice(1);
+        }
+      }
+    }
+
+    if (walletAddress) {
+      return walletAddress.slice(0, 6).toUpperCase();
+    }
+
+    return 'Wholecoiner';
+  }, [user?.email?.address, user?.linkedAccounts, walletAddress]);
 
   const handleSuccess = () => {
     router.push('/auth/2fa/verify');
@@ -26,10 +68,18 @@ export default function TwoFASetupPage() {
             Wholecoiner
           </span>
         </div>
-        <div className="hidden sm:flex items-center gap-3 text-xs text-[var(--text-secondary)]">
-          <div className="px-3 py-1 rounded-full border border-[var(--border-subtle)]">
+        <div className="flex items-center gap-3 text-xs text-[var(--text-secondary)]">
+          <div className="hidden sm:inline-flex px-3 py-1 rounded-full border border-[var(--border-subtle)]">
             Secured 2FA
           </div>
+          <UserProfileBadge
+            displayName={displayName}
+            walletAddress={walletAddress}
+            avatarUrl={avatarUrl}
+            size="sm"
+            orientation="vertical"
+            className="bg-[#22160d] border-none shadow-none px-3 py-3"
+          />
         </div>
       </header>
 

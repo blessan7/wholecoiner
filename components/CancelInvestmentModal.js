@@ -80,7 +80,7 @@ export default function CancelInvestmentModal({
         {progressInfo && (
           <div className="bg-gray-50 rounded p-4 mb-4">
             <p className="text-sm text-black mb-2">
-              You're <span className="font-semibold">{progressPercentage.toFixed(1)}%</span> complete and 
+              You&apos;re <span className="font-semibold">{progressPercentage.toFixed(1)}%</span> complete and 
               have accumulated <span className="font-semibold">{investedAmount.toFixed(6)} {goalCoin}</span> 
               {targetAmount > 0 && (
                 <> towards your goal of <span className="font-semibold">{targetAmount} {goalCoin}</span>.</>

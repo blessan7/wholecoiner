@@ -64,10 +64,10 @@ export default function TwoFALocked({ lockoutMinutes = 10, onUnlock }) {
       {/* Explanation */}
       <div className="mt-8 space-y-4 text-sm text-white text-left max-w-md">
         <p>
-          For your security, we've temporarily locked your account after 5 failed PIN attempts. After the countdown ends, you'll be able to try entering your PIN again.
+          For your security, we&apos;ve temporarily locked your account after 5 failed PIN attempts. After the countdown ends, you&apos;ll be able to try entering your PIN again.
         </p>
         <p>
-          If you've forgotten your PIN, please contact support for assistance.
+          If you&apos;ve forgotten your PIN, please contact support for assistance.
         </p>
       </div>
 

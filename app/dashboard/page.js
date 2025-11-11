@@ -4,6 +4,8 @@ import { usePrivy } from '@privy-io/react-auth';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import HeaderPriceTicker from '@/components/HeaderPriceTicker';
+import UserProfileBadge from '@/components/UserProfileBadge';
+import { getWalletAddressFromPrivy } from '@/lib/user';
 
 const STATUS_STYLES = {
   ACTIVE: 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
@@ -156,6 +158,10 @@ export default function Dashboard() {
   if (!authenticated || !user) return null;
 
   const userName = getUserName();
+  const walletAddress =
+    userData?.walletAddress ||
+    getWalletAddressFromPrivy(user) ||
+    '';
 
   const formatTokenAmount = (value, coin) => {
     const numeric = Number(value || 0);
@@ -328,20 +334,14 @@ export default function Dashboard() {
             >
               Log out
             </button>
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#22160d] overflow-hidden">
-              {avatarUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={avatarUrl}
-                  alt={userName}
-                  className="h-10 w-10 rounded-full object-cover"
-                />
-              ) : (
-                <span className="text-sm font-semibold text-[var(--accent)]">
-                  {userName.charAt(0).toUpperCase()}
-                </span>
-              )}
-            </div>
+            <UserProfileBadge
+              displayName={userName}
+              walletAddress={walletAddress}
+              avatarUrl={avatarUrl}
+              size="sm"
+              orientation="horizontal"
+              className="bg-[#22160d] border-none shadow-none px-3 py-2"
+            />
           </div>
         </div>
 

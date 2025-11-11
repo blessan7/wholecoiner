@@ -2,7 +2,9 @@
 
 import { usePrivy } from '@privy-io/react-auth';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
+import UserProfileBadge from '@/components/UserProfileBadge';
+import { getWalletAddressFromPrivy } from '@/lib/user';
 
 export default function LoginButton({ variant = 'hero' }) {
   const router = useRouter();
@@ -10,6 +12,37 @@ export default function LoginButton({ variant = 'hero' }) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [shouldSync, setShouldSync] = useState(false);
+
+  const walletAddress = getWalletAddressFromPrivy(user);
+  const googleAccount = useMemo(() => {
+    if (!Array.isArray(user?.linkedAccounts)) return null;
+    return user.linkedAccounts.find((account) => account.type === 'google_oauth') || null;
+  }, [user?.linkedAccounts]);
+  const avatarUrl = googleAccount?.picture ?? null;
+
+  const headerDisplayName = useMemo(() => {
+    const emailAddress =
+      typeof user?.email === 'string'
+        ? user.email
+        : user?.email?.address ||
+          googleAccount?.email ||
+          (Array.isArray(user?.linkedAccounts)
+            ? user.linkedAccounts.find((account) => account.type === 'email' && account.address)?.address
+            : null);
+
+    if (emailAddress) {
+      const [namePart] = emailAddress.split('@');
+      if (namePart) {
+        return namePart.charAt(0).toUpperCase() + namePart.slice(1);
+      }
+    }
+
+    if (walletAddress) {
+      return walletAddress.slice(0, 6).toUpperCase();
+    }
+
+    return 'Wholecoiner';
+  }, [user?.email, user?.linkedAccounts, googleAccount?.email, walletAddress]);
 
   const handleUserSync = useCallback(async () => {
     if (!authenticated || !user) return;
@@ -197,14 +230,23 @@ export default function LoginButton({ variant = 'hero' }) {
   // Show authenticated state
   if (authenticated && user) {
     if (variant === 'header') {
-      // Minimal logout button in header
       return (
-        <button
-          onClick={handleLogout}
-          className="flex h-10 min-w-[84px] cursor-pointer items-center justify-center overflow-hidden rounded-full border border-[var(--border-subtle)] bg-transparent px-5 text-sm font-medium text-[var(--text-primary)] transition-all hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] focus-visible:outline-offset-2"
-        >
-          <span className="truncate">Logout</span>
-        </button>
+        <div className="flex items-center gap-3">
+          <UserProfileBadge
+            displayName={headerDisplayName}
+            walletAddress={walletAddress}
+            avatarUrl={avatarUrl}
+            size="sm"
+            orientation="horizontal"
+            className="border-[var(--border-subtle)]/80 bg-[#22160d] px-3 py-2"
+          />
+          <button
+            onClick={handleLogout}
+            className="flex h-10 min-w-[84px] cursor-pointer items-center justify-center overflow-hidden rounded-full border border-[var(--border-subtle)] bg-transparent px-5 text-sm font-medium text-[var(--text-primary)] transition-all hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] focus-visible:outline-offset-2"
+          >
+            <span className="truncate">Logout</span>
+          </button>
+        </div>
       );
     }
     

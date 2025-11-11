@@ -158,7 +158,7 @@ export default function InvestmentStatus({ batchId, onCancel, onReQuote }) {
             <h3 className="font-semibold text-black">{stateDisplay.label}</h3>
             {isPending && (
               <p className="text-xs text-black mt-1">
-                You can keep using the app; we'll notify you when it lands.
+                You can keep using the app; we&apos;ll notify you when it lands.
               </p>
             )}
           </div>

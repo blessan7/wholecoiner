@@ -1,9 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { usePrivy } from '@privy-io/react-auth';
 import Link from 'next/link';
+import UserProfileBadge from '@/components/UserProfileBadge';
+import { getWalletAddressFromPrivy } from '@/lib/user';
 
 const COIN_OPTIONS = [
   {
@@ -151,20 +153,42 @@ export default function CreateGoalPage() {
     return () => clearTimeout(timeoutId);
   }, [formData.coin, formData.targetAmount, formData.amountInr, formData.frequency]);
 
-  // Get user avatar URL
-  const getAvatarUrl = () => {
-    if (user?.linkedAccounts && Array.isArray(user.linkedAccounts)) {
-      const googleAccount = user.linkedAccounts.find(
-        account => account.type === 'google_oauth'
-      );
-      if (googleAccount?.picture) {
-        return googleAccount.picture;
+  const avatarUrl = useMemo(() => {
+    if (!user?.linkedAccounts || !Array.isArray(user.linkedAccounts)) return null;
+    const googleAccount = user.linkedAccounts.find(
+      (account) => account.type === 'google_oauth'
+    );
+    return googleAccount?.picture ?? null;
+  }, [user?.linkedAccounts]);
+
+  const walletAddress = getWalletAddressFromPrivy(user);
+
+  const displayName = useMemo(() => {
+    if (user?.email?.address) {
+      const [namePart] = user.email.address.split('@');
+      if (namePart) {
+        return namePart.charAt(0).toUpperCase() + namePart.slice(1);
       }
     }
-    return null;
-  };
 
-  const avatarUrl = getAvatarUrl();
+    if (Array.isArray(user?.linkedAccounts)) {
+      const emailAccount = user.linkedAccounts.find(
+        (account) => account.type === 'email' && account.address
+      );
+      if (emailAccount?.address) {
+        const [namePart] = emailAccount.address.split('@');
+        if (namePart) {
+          return namePart.charAt(0).toUpperCase() + namePart.slice(1);
+        }
+      }
+    }
+
+    if (walletAddress) {
+      return walletAddress.slice(0, 6).toUpperCase();
+    }
+
+    return 'Wholecoiner';
+  }, [user?.email?.address, user?.linkedAccounts, walletAddress]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -276,18 +300,14 @@ export default function CreateGoalPage() {
               <span>Goal builder</span>
               <span className="text-[var(--accent)]">Create</span>
             </div>
-            <div className="flex h-10 w-10 items-center justify-center overflow-hidden rounded-full bg-[#22160d]">
-              {avatarUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={avatarUrl} alt="Profile avatar" className="h-10 w-10 rounded-full object-cover" />
-              ) : (
-                <span className="text-sm font-semibold text-[var(--accent)]">
-                  {user?.email?.address?.[0]?.toUpperCase() ||
-                    user?.linkedAccounts?.[0]?.address?.[0]?.toUpperCase() ||
-                    'U'}
-                </span>
-              )}
-            </div>
+            <UserProfileBadge
+              displayName={displayName}
+              walletAddress={walletAddress}
+              avatarUrl={avatarUrl}
+              size="sm"
+              orientation="horizontal"
+              className="bg-[#22160d] border-none shadow-none px-3 py-2"
+            />
           </div>
         </div>
       </header>
