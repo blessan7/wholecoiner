@@ -1,0 +1,43 @@
+{
+  "name": "wholecoiner-goal-tracker-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test:investment": "node scripts/test-investment-flow.js"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.18.0",
+    "@privy-io/react-auth": "^3.4.1",
+    "@privy-io/server-auth": "^1.32.5",
+    "@solana-program/memo": "^0.8.0",
+    "@solana-program/system": "^0.8.1",
+    "@solana-program/token": "^0.6.0",
+    "@solana/kit": "^3.0.3",
+    "@solana/spl-token": "^0.4.14",
+    "@solana/web3.js": "^1.98.4",
+    "bcryptjs": "^3.0.2",
+    "bufferutil": "^4.0.9",
+    "cookie": "^1.0.2",
+    "jsonwebtoken": "^9.0.2",
+    "nanoid": "^5.1.6",
+    "next": "15.1.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "utf-8-validate": "^5.0.10"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "eslint": "^9",
+    "eslint-config-next": "15.1.4",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.6.2",
+    "prisma": "^6.18.0",
+    "tailwindcss": "^4"
+  }
+}
