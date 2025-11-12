@@ -2,7 +2,7 @@ import { requireAuth, ensureTwoFa } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { logger } from '@/lib/logger';
 import { calculateProgress, calculateEstimatedCompletion } from '@/lib/goalValidation';
-import { getPriceInINR, getPriceUSD } from '@/lib/prices';
+import { getPriceUSD } from '@/lib/prices';
 import { GoalErrors } from '@/lib/errors';
 import { getTokenMint } from '@/lib/tokens';
 
@@ -32,16 +32,13 @@ export async function GET(request, { params }) {
       throw GoalErrors.GOAL_NOT_FOUND();
     }
     
-    // Get current price for this coin
-    const currentPriceInr = await getPriceInINR(goal.coin);
-    
     // Get current price in USD
     let currentPriceUSD = null;
-    let currentValueUSDC = null;
+    let currentValueUSD = null;
     try {
       const tokenInfo = getTokenMint(goal.coin);
       currentPriceUSD = await getPriceUSD(tokenInfo.mint);
-      currentValueUSDC = goal.investedAmount * currentPriceUSD;
+      currentValueUSD = goal.investedAmount * currentPriceUSD;
     } catch (error) {
       logger.warn('Failed to fetch USD price', { error: error.message, goalId, requestId });
       // Continue without USD values if price fetch fails
@@ -50,14 +47,12 @@ export async function GET(request, { params }) {
     // Calculate progress metrics
     const progressPercentage = calculateProgress(goal.investedAmount, goal.targetAmount);
     
-    // Calculate INR totals
-    const totalInvestedINR = goal.investedAmount * currentPriceInr;
-    const targetValueINR = goal.targetAmount * currentPriceInr;
-    const currentValueINR = goal.investedAmount * currentPriceInr;
+    // Calculate USD totals
+    const totalInvestedUSD = currentValueUSD ?? 0;
+    const targetValueUSD = currentPriceUSD ? goal.targetAmount * currentPriceUSD : 0;
     
-    // For now, profit/loss is 0 since we haven't tracked purchase prices yet
-    // Tomorrow when swaps are implemented, this will use actual transaction data
-    const profitLossINR = 0;
+    // For now, profit/loss is 0 until we track buy prices
+    const profitLossUSD = 0;
     const profitLossPercentage = 0;
     
     // Calculate remaining and ETA
@@ -65,31 +60,17 @@ export async function GET(request, { params }) {
     let estimatedCompletion = null;
     
     if (remainingAmount > 0 && goal.status === 'ACTIVE') {
-      try {
-        const eta = await calculateEstimatedCompletion(
-          goal.coin,
-          remainingAmount,
-          goal.amountInr,
-          goal.frequency
-        );
-        estimatedCompletion = {
-          estimatedCompletionDate: eta.estimatedCompletionDate,
-          monthsToComplete: eta.monthsToComplete,
-          intervalsNeeded: eta.intervalsNeeded
-        };
-      } catch (error) {
-        // If ETA > 10y, just omit it
-        if (error.code === 'GOAL_DURATION_TOO_LONG') {
-          logger.warn('ETA exceeds 10 years', { goalId, requestId });
-          estimatedCompletion = {
-            error: 'ETA exceeds maximum 10 years',
-            monthsToComplete: null,
-            estimatedCompletionDate: null
-          };
-        } else {
-          throw error;
-        }
-      }
+      const eta = await calculateEstimatedCompletion(
+        goal.coin,
+        remainingAmount,
+        goal.amountPerInterval,
+        goal.frequency
+      );
+      estimatedCompletion = {
+        estimatedCompletionDate: eta.estimatedCompletionDate,
+        monthsToComplete: eta.monthsToComplete,
+        intervalsNeeded: eta.intervalsNeeded
+      };
     }
     
     // Next investment date (simple calculation based on frequency)
@@ -122,20 +103,18 @@ export async function GET(request, { params }) {
       targetAmount: goal.targetAmount,
       investedAmount: goal.investedAmount,
       progressPercentage,
-      currentPriceInr,
       currentPriceUSD: currentPriceUSD ? Math.round(currentPriceUSD * 100) / 100 : null,
-      totalInvestedINR: Math.round(totalInvestedINR * 100) / 100,
-      targetValueINR: Math.round(targetValueINR * 100) / 100,
-      currentValueINR: Math.round(currentValueINR * 100) / 100,
-      currentValueUSDC: currentValueUSDC ? Math.round(currentValueUSDC * 100) / 100 : null,
-      profitLossINR,
+      totalInvestedUSD: Math.round(totalInvestedUSD * 100) / 100,
+      targetValueUSD: Math.round(targetValueUSD * 100) / 100,
+      currentValueUSD: currentValueUSD ? Math.round(currentValueUSD * 100) / 100 : null,
+      profitLossUSD,
       profitLossPercentage,
       remainingAmount,
       estimatedCompletion,
       nextInvestmentDate,
       status: goal.status,
       frequency: goal.frequency,
-      amountInr: goal.amountInr,
+      amountPerInterval: goal.amountPerInterval,
       createdAt: goal.createdAt.toISOString(),
       updatedAt: goal.updatedAt.toISOString()
     }, { status: 200 });

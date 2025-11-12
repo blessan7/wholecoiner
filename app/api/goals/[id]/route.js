@@ -56,11 +56,11 @@ export async function GET(request, { params }) {
         estimatedCompletion = await calculateEstimatedCompletion(
           goal.coin,
           remainingAmount,
-          goal.amountInr,
+          goal.amountPerInterval,
           goal.frequency
         );
       } catch (e) {
-        // If ETA calc fails (e.g., too long), just omit it
+        // If ETA calc fails (e.g., price lookup issues), just omit it
         logger.warn('ETA calculation failed', { goalId, error: e.message });
       }
     }
@@ -156,12 +156,12 @@ export async function PATCH(request, { params }) {
     
     const updates = {};
     
-    // Validate and apply amountInr update
-    if (body.amountInr !== undefined) {
-      if (body.amountInr < 100) {
-        throw GoalErrors.INVALID_AMOUNT('amountInr', 100, Infinity);
+    // Validate and apply amountPerInterval update
+    if (body.amountPerInterval !== undefined) {
+      if (body.amountPerInterval < 10) {
+        throw GoalErrors.INVALID_AMOUNT('amountPerInterval', 10, Infinity);
       }
-      updates.amountInr = body.amountInr;
+      updates.amountPerInterval = body.amountPerInterval;
     }
     
     // Validate and apply frequency update

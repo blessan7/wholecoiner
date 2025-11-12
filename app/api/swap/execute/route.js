@@ -411,7 +411,7 @@ async function getQuoteData({ goalId, batchId, inputMint, outputMint, slippageBp
       provider: 'JUPITER',
       network: getNetwork() === 'devnet' ? 'DEVNET' : 'MAINNET',
       tokenMint: outputTokenInfo.mint,
-      amountInr: onrampTransaction.amountInr,
+      amountUsd: onrampTransaction.amountUsd,
       amountCrypto: outputAmount,
       meta: {
         state: 'QUOTED',
@@ -906,7 +906,7 @@ async function handleExecuteMode({ goalId, batchId, signedTransaction, quoteResp
         provider: 'JUPITER',
       network: getNetwork() === 'devnet' ? 'DEVNET' : 'MAINNET',
         txnHash: signature,
-        amountInr: onrampTransaction.amountInr,
+        amountUsd: onrampTransaction.amountUsd,
       amountCrypto: outAmountGoalTokenUnits,
         tokenMint: outputTokenInfo.mint,
         meta: {

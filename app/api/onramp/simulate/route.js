@@ -81,7 +81,7 @@ export async function POST(request) {
           id: existing.id,
           type: existing.type,
           txnHash: existing.txnHash,
-          amountUsdc: existing.amountInr, // Keep using amountInr in DB for backward compatibility
+          amountUsdc: existing.amountUsd,
           amountCrypto: existing.amountCrypto,
           network: existing.network,
         },
@@ -195,7 +195,7 @@ export async function POST(request) {
           provider: 'ONMETA',
           network: 'MAINNET',
           txnHash: signature,
-          amountInr: amountUsdc, // Store as amountInr in DB for backward compatibility
+          amountUsd: amountUsdc,
           amountCrypto: solAmount,
           tokenMint: TOKEN_MINTS.SOL.mint,
           meta: {
@@ -223,7 +223,7 @@ export async function POST(request) {
         id: dbTransaction.id,
         type: dbTransaction.type,
         txnHash: dbTransaction.txnHash,
-        amountUsdc: dbTransaction.amountInr, // Return as amountUsdc for frontend
+        amountUsdc: dbTransaction.amountUsd,
         amountCrypto: dbTransaction.amountCrypto,
         network: dbTransaction.network,
       },

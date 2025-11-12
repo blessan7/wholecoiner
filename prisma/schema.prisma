@@ -31,16 +31,16 @@ model User {
 }
 
 model Goal {
-  id              String           @id @default(cuid())
-  userId          String           @map("user_id")
-  coin            CoinType
-  targetAmount    Float            @map("target_amount")
-  investedAmount  Float            @default(0) @map("invested_amount")
-  frequency       Frequency
-  amountInr       Float            @map("amount_inr")
-  status          GoalStatus       @default(ACTIVE)
-  createdAt       DateTime         @default(now()) @map("created_at")
-  updatedAt       DateTime         @updatedAt @map("updated_at")
+  id                 String           @id @default(cuid())
+  userId             String           @map("user_id")
+  coin               CoinType
+  targetAmount       Float            @map("target_amount")
+  investedAmount     Float            @default(0) @map("invested_amount")
+  frequency          Frequency
+  amountPerInterval  Float            @map("amount_per_interval_usd")
+  status             GoalStatus       @default(ACTIVE)
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
   
   user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   transactions    Transaction[]
@@ -59,7 +59,7 @@ model Transaction {
   provider        Provider
   network         Network
   txnHash         String?          @map("txn_hash")
-  amountInr       Float?           @map("amount_inr")
+  amountUsd       Float?           @map("amount_usd")
   amountCrypto    Float?           @map("amount_crypto")
   tokenMint       String?          @map("token_mint")
   timestamp       DateTime         @default(now())

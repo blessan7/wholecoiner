@@ -134,7 +134,7 @@ export default function GoalProgressPage({ params }) {
     if (!progress || !progress.currentPriceUSD) return null;
 
     const targetValueUSD = progress.targetAmount * progress.currentPriceUSD;
-    const totalInvestedUSD = progress.currentValueUSDC || 0; // Use current value as invested value
+    const totalInvestedUSD = progress.totalInvestedUSD ?? progress.currentValueUSD ?? 0;
     
     // Calculate profit/loss in USD (for now 0, but structure for future)
     const profitLossUSD = 0;
@@ -410,7 +410,7 @@ export default function GoalProgressPage({ params }) {
                     <div className="flex justify-between items-center">
                       <span className="text-[#c9b292] text-sm font-medium">Total Invested</span>
                       <span className="text-white text-lg font-bold">
-                        {progress.currentValueUSDC ? formatCurrencyUSD(progress.currentValueUSDC) : 'N/A'}
+                        {progress.currentValueUSD ? formatCurrencyUSD(progress.currentValueUSD) : 'N/A'}
                       </span>
                     </div>
                   </div>
@@ -418,7 +418,7 @@ export default function GoalProgressPage({ params }) {
                     <div className="flex justify-between items-center">
                       <span className="text-[#c9b292] text-sm font-medium">Current Value</span>
                       <span className="text-white text-lg font-bold">
-                        {progress.currentValueUSDC ? formatCurrencyUSD(progress.currentValueUSDC) : 'N/A'}
+                        {progress.currentValueUSD ? formatCurrencyUSD(progress.currentValueUSD) : 'N/A'}
                       </span>
                     </div>
                     <div className="flex justify-between items-center">
@@ -455,7 +455,7 @@ export default function GoalProgressPage({ params }) {
                     <div className="flex justify-between items-center">
                       <span className="text-[#c9b292] text-sm font-medium">Amount per Interval</span>
                       <span className="text-white text-lg font-bold">
-                        {formatCurrencyUSD(progress.amountInr)}
+                        {formatCurrencyUSD(progress.amountPerInterval)}
                       </span>
                     </div>
                     <div className="flex justify-between items-center">

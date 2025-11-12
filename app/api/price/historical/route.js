@@ -1,5 +1,5 @@
 import { requireAuth, ensureTwoFa } from '@/lib/auth';
-import { isValidCoin, getPriceInINR } from '@/lib/prices';
+import { isValidCoin, getPriceUSD, getTokenInfo } from '@/lib/prices';
 import { logger } from '@/lib/logger';
 
 /**
@@ -52,7 +52,17 @@ export async function GET(request) {
     logger.info('Fetching historical prices', { coin: normalized, range, userId: user.id, requestId });
     
     // Generate mock 30-day series
-    const currentPrice = await getPriceInINR(normalized);
+    const tokenInfo = getTokenInfo(normalized);
+    if (!tokenInfo) {
+      return Response.json({
+        success: false,
+        error: {
+          code: 'INVALID_COIN',
+          message: `Unknown token: ${coin}. Supported tokens: BTC, ETH, SOL, USDC, USDT, JUP, RAY, BONK, WIF, PYTH`
+        }
+      }, { status: 422 });
+    }
+    const currentPrice = await getPriceUSD(tokenInfo.mint);
     const series = [];
     const now = new Date();
     
@@ -66,7 +76,7 @@ export async function GET(request) {
       
       series.push({
         date: date.toISOString().split('T')[0], // YYYY-MM-DD
-        priceInr: price
+        priceUsd: price
       });
     }
     

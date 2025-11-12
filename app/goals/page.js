@@ -52,13 +52,13 @@ const formatNumber = (value, maximumFractionDigits = 6) => {
   });
 };
 
-const formatINR = (value) => {
+const formatCurrencyUSD = (value) => {
   const numericValue = Number(value ?? 0);
   if (!numericValue) return '—';
-  return new Intl.NumberFormat('en-IN', {
+  return new Intl.NumberFormat('en-US', {
     style: 'currency',
-    currency: 'INR',
-    maximumFractionDigits: 0,
+    currency: 'USD',
+    maximumFractionDigits: numericValue >= 1000 ? 0 : 2,
   }).format(numericValue);
 };
 
@@ -126,7 +126,7 @@ const GoalCard = ({ goal, onNavigate }) => {
         <div className="flex flex-col gap-1">
           <p className="text-sm text-[#a89987]">Contribution Plan</p>
           <p className="text-lg font-medium text-[#f0eade]">
-            {formatINR(goal.amountInr)} • {FREQUENCY_LABELS[goal.frequency] ?? goal.frequency ?? '—'}
+            {formatCurrencyUSD(goal.amountPerInterval)} • {FREQUENCY_LABELS[goal.frequency] ?? goal.frequency ?? '—'}
           </p>
         </div>
         <div className="flex flex-col gap-1">

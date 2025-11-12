@@ -179,7 +179,7 @@ export async function POST(request) {
             provider: 'FAUCET',
             network: network === 'devnet' ? 'DEVNET' : 'MAINNET',
             txnHash: simulatedSignature,
-            amountInr: amountUsdc, // Store USDC amount in amountInr for backward compatibility
+            amountUsd: amountUsdc,
             amountCrypto: amountUsdc, // Amount in USDC (not converted)
             tokenMint: usdcMintInfo.mint, // Mainnet USDC mint
             meta: {
@@ -223,7 +223,7 @@ export async function POST(request) {
             id: dbTransaction.id,
             type: dbTransaction.type,
             txnHash: dbTransaction.txnHash,
-            amountUsdc: dbTransaction.amountInr,
+            amountUsdc: dbTransaction.amountUsd,
             amountCrypto: dbTransaction.amountCrypto,
             network: dbTransaction.network,
             state,
@@ -274,7 +274,7 @@ export async function POST(request) {
         id: dbTransaction.id,
         type: dbTransaction.type,
         txnHash: dbTransaction.txnHash,
-        amountUsdc: dbTransaction.amountInr,
+        amountUsdc: dbTransaction.amountUsd,
         amountCrypto: dbTransaction.amountCrypto,
         network: dbTransaction.network,
         state: dbTransaction.meta?.state || 'ONRAMP_CONFIRMED',

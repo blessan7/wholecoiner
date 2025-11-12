@@ -23,16 +23,16 @@ export async function POST(request) {
     ensureTwoFa(sess, user);
     
     const body = await request.json();
-    const { coin, targetAmount, amountInr, frequency } = body;
+    const { coin, targetAmount, amountPerInterval, frequency } = body;
     
     logger.info('Creating goal', { userId: user.id, coin, requestId });
     
     // Validate and normalize coin
-    const normalizedCoin = validateGoalInput({ coin, targetAmount, amountInr, frequency });
+    const normalizedCoin = validateGoalInput({ coin, targetAmount, amountPerInterval, frequency });
     
     // Calculate ETA (for response only, not stored)
-    const { monthsToComplete, estimatedCompletionDate, totalCostINR } = 
-      await calculateEstimatedCompletion(normalizedCoin, targetAmount, amountInr, frequency);
+    const { monthsToComplete, estimatedCompletionDate, totalCostUSD } = 
+      await calculateEstimatedCompletion(normalizedCoin, targetAmount, amountPerInterval, frequency);
     
     // Get token metadata for response
     const tokenInfo = getTokenInfo(normalizedCoin);
@@ -45,7 +45,7 @@ export async function POST(request) {
         targetAmount,
         investedAmount: 0,
         frequency,
-        amountInr,
+        amountPerInterval,
         status: 'ACTIVE'
       }
     });
@@ -62,7 +62,7 @@ export async function POST(request) {
       },
       estimatedCompletionDate,
       monthsToComplete,
-      totalCostINR
+      totalCostUSD
     }, { status: 201 });
     
   } catch (error) {

@@ -164,7 +164,7 @@ const TransactionHistory = forwardRef(function TransactionHistory({ goalId }, re
                   </span>
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap text-sm text-white">
-                  {formatCurrency(tx.amountInr)}
+                  {formatCurrency(tx.amountUsd)}
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap text-sm text-white">
                   {formatAmount(tx.amountCrypto)} {tx.type === 'ONRAMP' ? 'USDC' : ''}

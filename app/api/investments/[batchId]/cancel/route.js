@@ -102,7 +102,7 @@ export async function POST(request, { params }) {
 
     // Get ONRAMP transaction to get amount for notification
     const onrampTxn = transactions.find(t => t.type === 'ONRAMP');
-    const amountUsdc = onrampTxn?.amountInr || 0;
+    const amountUsdc = onrampTxn?.amountUsd || 0;
 
     // Update all transactions to CANCELED state
     await prisma.$transaction(async (tx) => {

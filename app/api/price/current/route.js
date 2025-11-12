@@ -1,12 +1,12 @@
 import { requireAuth, ensureTwoFa } from '@/lib/auth';
-import { getPricesInINR, getPricesInUSD } from '@/lib/prices';
+import { getPricesInUSD } from '@/lib/prices';
 import { getPopularTokenSymbols } from '@/lib/popular-tokens';
 import { logger } from '@/lib/logger';
 
 /**
  * GET /api/price/current?coins=BTC,ETH,SOL&currency=USD
  * GET /api/price/current?currency=USD (returns all popular tokens in USD)
- * Returns current prices in USD or INR with caching
+ * Returns current prices in USD with caching
  */
 export async function GET(request) {
   const requestId = request.headers.get('x-request-id') || crypto.randomUUID();
@@ -17,7 +17,7 @@ export async function GET(request) {
     
     const { searchParams } = new URL(request.url);
     const coinsParam = searchParams.get('coins');
-    const currency = searchParams.get('currency') || 'USD'; // Default to USD
+    const currency = (searchParams.get('currency') || 'USD').toUpperCase(); // USD only
     
     let coinSymbols;
     
@@ -57,13 +57,18 @@ export async function GET(request) {
       requestId 
     });
     
-    // Fetch prices based on currency
-    let priceData;
-    if (currency.toUpperCase() === 'USD') {
-      priceData = await getPricesInUSD(coinSymbols);
-    } else {
-      priceData = await getPricesInINR(coinSymbols);
+    if (currency !== 'USD') {
+      return Response.json({
+        success: false,
+        error: {
+          code: 'UNSUPPORTED_CURRENCY',
+          message: 'Prices are only available in USD.'
+        }
+      }, { status: 400 });
     }
+    
+    // Fetch prices in USD
+    const priceData = await getPricesInUSD(coinSymbols);
     
     logger.info('Prices fetched', { 
       coins: coinSymbols, 
@@ -79,7 +84,7 @@ export async function GET(request) {
       fetchedAt: priceData.fetchedAt,
       stale: priceData.stale || false,
       source: priceData.source || 'jupiter',
-      currency: currency.toUpperCase(),
+      currency: 'USD',
       count: Object.keys(priceData.prices).length
     }, { status: 200 });
     

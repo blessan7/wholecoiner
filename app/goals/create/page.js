@@ -47,7 +47,7 @@ export default function CreateGoalPage() {
     coin: 'BTC',
     targetAmount: 1,
     frequency: 'MONTHLY',
-    amountInr: 5000
+    amountPerInterval: 5000
   });
   const [goalName, setGoalName] = useState('BTC Investment Goal');
   const [estimatedCompletion, setEstimatedCompletion] = useState(null);
@@ -74,7 +74,14 @@ export default function CreateGoalPage() {
   // Calculate estimated completion time
   useEffect(() => {
     const calculateEstimate = async () => {
-      if (!formData.coin || !formData.targetAmount || !formData.amountInr || !formData.frequency || formData.targetAmount <= 0 || formData.amountInr <= 0) {
+      if (
+        !formData.coin ||
+        !formData.targetAmount ||
+        !formData.amountPerInterval ||
+        !formData.frequency ||
+        formData.targetAmount <= 0 ||
+        formData.amountPerInterval <= 0
+      ) {
         setEstimatedCompletion(null);
         setCoinPriceUSD(null);
         return;
@@ -103,7 +110,16 @@ export default function CreateGoalPage() {
 
           // Calculate completion in USD
           const totalCostUSD = formData.targetAmount * priceUSD;
-          const intervalsNeeded = Math.ceil(totalCostUSD / formData.amountInr);
+          const intervalsNeeded = Math.ceil(totalCostUSD / formData.amountPerInterval);
+
+          if (!Number.isFinite(intervalsNeeded) || intervalsNeeded <= 0) {
+            setEstimatedCompletion({
+              error: 'Unable to project completion with the current contribution amount.',
+              totalCostUSD: Math.round(totalCostUSD * 100) / 100
+            });
+            setLoadingEstimate(false);
+            return;
+          }
           
           const daysPerInterval = {
             'DAILY': 1,
@@ -113,17 +129,6 @@ export default function CreateGoalPage() {
           
           const daysToComplete = intervalsNeeded * daysPerInterval;
           const monthsToComplete = Math.ceil(daysToComplete / 30);
-          
-          // Validate max 10 years (120 months)
-          if (monthsToComplete > 120) {
-            setEstimatedCompletion({
-              error: 'Duration exceeds 10 years',
-              monthsToComplete: monthsToComplete,
-              totalCostUSD: Math.round(totalCostUSD)
-            });
-            setLoadingEstimate(false);
-            return;
-          }
           
           const estimatedDate = new Date();
           estimatedDate.setDate(estimatedDate.getDate() + daysToComplete);
@@ -151,7 +156,7 @@ export default function CreateGoalPage() {
     // Debounce calculation
     const timeoutId = setTimeout(calculateEstimate, 500);
     return () => clearTimeout(timeoutId);
-  }, [formData.coin, formData.targetAmount, formData.amountInr, formData.frequency]);
+  }, [formData.coin, formData.targetAmount, formData.amountPerInterval, formData.frequency]);
 
   const avatarUrl = useMemo(() => {
     if (!user?.linkedAccounts || !Array.isArray(user.linkedAccounts)) return null;
@@ -503,15 +508,15 @@ export default function CreateGoalPage() {
                   <div className="relative">
                     <span className="pointer-events-none absolute inset-y-0 left-4 flex items-center text-[var(--text-secondary)]">$</span>
                     <input
-                      id="amount-inr"
+                      id="amount-per-interval"
                       type="number"
                       step="10"
                       min="10"
-                      value={formData.amountInr}
+                      value={formData.amountPerInterval}
                       onChange={(e) =>
                         setFormData({
                           ...formData,
-                          amountInr: parseFloat(e.target.value) || 0
+                          amountPerInterval: parseFloat(e.target.value) || 0
                         })
                       }
                       required
@@ -549,7 +554,7 @@ export default function CreateGoalPage() {
                 ) : estimatedCompletion?.error ? (
                   <div className="space-y-4">
                     <div className="rounded-2xl border border-red-500/40 bg-red-900/20 p-4 text-sm text-red-300">
-                      {estimatedCompletion.error}. Please adjust your target or cadence (maximum duration is 10 years).
+                      {estimatedCompletion.error}
                     </div>
                     {estimatedCompletion.totalCostUSD && (
                       <div className="flex items-center justify-between rounded-2xl border border-[#292018] bg-[#1a120a] p-4">

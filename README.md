@@ -1,6 +1,6 @@
 # 🪙 Wholecoiner Goal Tracker
 
-A web microapp to help users systematically accumulate one full cryptocurrency unit (e.g., 1 BTC, 1 ETH, 1 SOL) via recurring micro-investments in INR.
+A web microapp to help users systematically accumulate one full cryptocurrency unit (e.g., 1 BTC, 1 ETH, 1 SOL) via recurring USD-denominated micro-investments.
 
 ## 🎯 Overview
 
