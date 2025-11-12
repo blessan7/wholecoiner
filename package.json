@@ -10,7 +10,6 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test:investment": "node scripts/test-investment-flow.js",
-
     "postinstall": "prisma generate",
     "migrate:deploy": "prisma migrate deploy"
   },
@@ -27,6 +26,7 @@
     "bcryptjs": "^3.0.2",
     "bufferutil": "^4.0.9",
     "cookie": "^1.0.2",
+    "framer-motion": "^11.18.2",
     "jsonwebtoken": "^9.0.2",
     "nanoid": "^5.1.6",
     "next": "15.1.4",

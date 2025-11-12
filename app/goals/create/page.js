@@ -245,23 +245,6 @@ export default function CreateGoalPage() {
     return `${months} ${months === 1 ? 'month' : 'months'}`;
   };
 
-  const [savingDraft, setSavingDraft] = useState(false);
-
-  const handleSaveDraft = async () => {
-    setError('');
-    setSavingDraft(true);
-    try {
-      // Lightweight placeholder flow – future draft endpoint can plug in here.
-      await new Promise((resolve) => setTimeout(resolve, 600));
-      router.push('/goals');
-    } catch (err) {
-      console.error('Draft save error:', err);
-      setError('Unable to save draft right now. Please try again.');
-    } finally {
-      setSavingDraft(false);
-    }
-  };
-
   if (!ready || !authenticated || !user) {
     return (
       <div className="min-h-screen w-full bg-[var(--bg-main)] bg-gradient-to-b from-[var(--bg-main)] via-[#17110b] to-[#120904] flex flex-col items-center justify-center text-[var(--text-primary)]">
@@ -635,24 +618,7 @@ export default function CreateGoalPage() {
               <div className="text-xs text-[var(--text-secondary)]">
                 By creating this goal you agree to our stacking cadence and understand that market prices can shift the completion date.
               </div>
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                <button
-                  type="button"
-                  onClick={handleSaveDraft}
-                  disabled={savingDraft || loading}
-                  className="btn-ghost h-11 px-6 text-sm font-semibold uppercase tracking-[0.18em] disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {savingDraft ? (
-                    <span className="flex items-center gap-2">
-                      <span className="inline-flex h-3.5 w-3.5 items-center justify-center">
-                        <span className="h-full w-full rounded-full border border-[var(--accent)] border-t-transparent animate-spin" />
-                      </span>
-                      Saving…
-                    </span>
-                  ) : (
-                    'Save as draft'
-                  )}
-                </button>
+              <div className="flex sm:flex-row sm:items-center">
                 <button
                   type="submit"
                   disabled={loading || loadingEstimate}

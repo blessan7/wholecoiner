@@ -27,10 +27,6 @@ export default function Home() {
               Wholecoiner
             </span>
           </div>
-          <div className="hidden items-center gap-3 text-sm font-medium md:flex">
-            <button className="btn-ghost">Log in</button>
-            <button className="btn-primary">Get Started</button>
-          </div>
           <div className="md:hidden">
             <LoginButton variant="header" />
           </div>

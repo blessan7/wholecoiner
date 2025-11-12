@@ -3,7 +3,10 @@
 import { useState, useEffect, useImperativeHandle, forwardRef } from 'react';
 import { getTxExplorerUrl } from '@/lib/solana-explorer';
 
-const TransactionHistory = forwardRef(function TransactionHistory({ goalId }, ref) {
+const TransactionHistory = forwardRef(function TransactionHistory(
+  { goalId, className = '', showHeader = true, title = 'Transaction History' },
+  ref
+) {
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -74,8 +77,10 @@ const TransactionHistory = forwardRef(function TransactionHistory({ goalId }, re
 
   if (loading) {
     return (
-      <div className="rounded-xl bg-[#483923] p-6">
-        <h2 className="text-white text-[22px] font-bold leading-tight tracking-[-0.015em] mb-4">Transaction History</h2>
+      <div className={`rounded-xl bg-[#483923] p-6 ${className}`}>
+        {showHeader && (
+          <h2 className="text-white text-[22px] font-bold leading-tight tracking-[-0.015em] mb-4">{title}</h2>
+        )}
         <div className="text-center py-8">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-2"></div>
           <p className="text-[#c9b292] text-sm">Loading transactions...</p>
@@ -86,8 +91,10 @@ const TransactionHistory = forwardRef(function TransactionHistory({ goalId }, re
 
   if (error) {
     return (
-      <div className="rounded-xl bg-[#483923] p-6">
-        <h2 className="text-white text-[22px] font-bold leading-tight tracking-[-0.015em] mb-4">Transaction History</h2>
+      <div className={`rounded-xl bg-[#483923] p-6 ${className}`}>
+        {showHeader && (
+          <h2 className="text-white text-[22px] font-bold leading-tight tracking-[-0.015em] mb-4">{title}</h2>
+        )}
         <div className="bg-red-900/30 border border-red-700 rounded-lg p-4">
           <p className="text-red-400">{error}</p>
           <button
@@ -103,8 +110,10 @@ const TransactionHistory = forwardRef(function TransactionHistory({ goalId }, re
 
   if (transactions.length === 0) {
     return (
-      <div className="rounded-xl bg-[#483923] p-6">
-        <h2 className="text-white text-[22px] font-bold leading-tight tracking-[-0.015em] mb-4">Transaction History</h2>
+      <div className={`rounded-xl bg-[#483923] p-6 ${className}`}>
+        {showHeader && (
+          <h2 className="text-white text-[22px] font-bold leading-tight tracking-[-0.015em] mb-4">{title}</h2>
+        )}
         <div className="text-center py-8">
           <svg className="mx-auto h-12 w-12 text-[#c9b292] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
@@ -117,16 +126,18 @@ const TransactionHistory = forwardRef(function TransactionHistory({ goalId }, re
   }
 
   return (
-    <div className="rounded-xl bg-[#483923] p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-white text-[22px] font-bold leading-tight tracking-[-0.015em]">Transaction History</h2>
-        <button
-          onClick={fetchTransactions}
-          className="text-sm text-primary hover:text-primary/80 transition-colors"
-        >
-          Refresh
-        </button>
-      </div>
+    <div className={`rounded-xl bg-[#483923] p-6 ${className}`}>
+      {showHeader && (
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-white text-[22px] font-bold leading-tight tracking-[-0.015em]">{title}</h2>
+          <button
+            onClick={fetchTransactions}
+            className="text-sm text-primary hover:text-primary/80 transition-colors"
+          >
+            Refresh
+          </button>
+        </div>
+      )}
 
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-[#221a10]">
