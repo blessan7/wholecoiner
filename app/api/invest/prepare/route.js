@@ -11,7 +11,7 @@ import { nanoid } from 'nanoid';
 import { getSwapQuote, getSwapTransaction } from '@/lib/jupiter';
 import { getSolanaConnection, checkATAExists, createATAWithAppWallet, isToken2022 } from '@/lib/solana';
 import { PublicKey } from '@solana/web3.js';
-import { TOKEN_MINTS, getTokenMint, toSmallestUnits, fromSmallestUnits, getNetwork } from '@/lib/tokens';
+import { TOKEN_MINTS, getTokenMint, toSmallestUnits, fromSmallestUnits, getNetwork, isNativeSOL } from '@/lib/tokens';
 import { SwapErrors, AuthenticationError, ValidationError } from '@/lib/errors';
 import { ensureIdempotency } from '@/lib/idempotency';
 import { checkRateLimit } from '@/lib/rateLimit';
@@ -123,20 +123,50 @@ export async function POST(request) {
     const outputTokenInfo = getTokenMint(goal.coin, 'mainnet');
     const swapAmountInSmallestUnits = toSmallestUnits(amountUsd, inputTokenInfo.decimals);
     
-    // Check and create ATA for output token
-    const isToken2022Mint = await isToken2022(outputTokenInfo.mint);
-    const { exists: ataExists } = await checkATAExists(
-      outputTokenInfo.mint,
-      goal.user.walletAddress,
-      isToken2022Mint
-    );
-    
-    if (!ataExists) {
-      await createATAWithAppWallet(
+    // Check and create ATA for output token if needed (skip for native SOL)
+    if (isNativeSOL(outputTokenInfo.mint)) {
+      logger.info('[INVEST] Skipping ATA check for native SOL', {
+        outputMint: outputTokenInfo.mint,
+        userWallet: goal.user.walletAddress,
+        requestId
+      });
+    } else {
+      logger.info('[INVEST] Checking ATA for output token', {
+        outputMint: outputTokenInfo.mint,
+        userWallet: goal.user.walletAddress,
+        requestId
+      });
+      
+      const isToken2022Mint = await isToken2022(outputTokenInfo.mint);
+      const { exists: ataExists } = await checkATAExists(
         outputTokenInfo.mint,
         goal.user.walletAddress,
         isToken2022Mint
       );
+      
+      if (!ataExists) {
+        logger.info('[INVEST] Creating ATA for output token', {
+          outputMint: outputTokenInfo.mint,
+          userWallet: goal.user.walletAddress,
+          requestId
+        });
+        
+        await createATAWithAppWallet(
+          outputTokenInfo.mint,
+          goal.user.walletAddress,
+          isToken2022Mint
+        );
+        
+        logger.info('[INVEST] ATA created successfully', {
+          outputMint: outputTokenInfo.mint,
+          requestId
+        });
+      } else {
+        logger.debug('[INVEST] ATA already exists', {
+          outputMint: outputTokenInfo.mint,
+          requestId
+        });
+      }
     }
     
     // Get Jupiter quote

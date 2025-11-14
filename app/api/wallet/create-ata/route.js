@@ -7,7 +7,7 @@ import { requireAuth } from '@/lib/auth';
 import { createATAWithAppWallet, checkATAExists, isToken2022 } from '@/lib/solana';
 import { logger } from '@/lib/logger';
 import { AuthenticationError, AuthorizationError, ValidationError } from '@/lib/errors';
-import { getNetwork } from '@/lib/tokens';
+import { getNetwork, isNativeSOL } from '@/lib/tokens';
 
 export async function POST(request) {
   const requestId = request.headers.get('x-request-id') || crypto.randomUUID();
@@ -31,6 +31,24 @@ export async function POST(request) {
     
     if (!mintAddress) {
       throw new ValidationError('mintAddress is required');
+    }
+    
+    // Reject native SOL - it doesn't require a token account
+    if (isNativeSOL(mintAddress)) {
+      logger.warn('[WALLET] Attempted to create ATA for native SOL', {
+        userId: user.id,
+        walletAddress: user.walletAddress,
+        mintAddress,
+        requestId
+      });
+      
+      return Response.json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Native SOL does not require a token account. SOL is stored directly in your wallet balance.'
+        }
+      }, { status: 400 });
     }
     
     logger.info('[WALLET] Creating ATA for mint', { 

@@ -9,7 +9,7 @@ import { logger } from '@/lib/logger';
 import { getSwapQuote, getSwapTransaction, submitSwapTransaction } from '@/lib/jupiter';
 import { getSolanaConnection, isValidSolanaAddress, checkATAExists, createATAWithAppWallet, isToken2022 } from '@/lib/solana';
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
-import { getTokenMint, toSmallestUnits, fromSmallestUnits, getNetwork } from '@/lib/tokens';
+import { getTokenMint, toSmallestUnits, fromSmallestUnits, getNetwork, isNativeSOL } from '@/lib/tokens';
 import { SwapErrors, AuthenticationError, AuthorizationError, ValidationError, SwapError } from '@/lib/errors';
 import { ensureIdempotency } from '@/lib/idempotency';
 import { calculateProgress, shouldAutoComplete } from '@/lib/goalValidation';
@@ -20,6 +20,28 @@ const SLIPPAGE_CONFIG = {
   HIGH_VOLATILITY: 100,  // 1%
   MAX_ALLOWED: 200       // 2%
 };
+
+/**
+ * Calculate next slippage level for retry attempts
+ * Progression: 50 bps (0.5%) → 100 bps (1%) → 150 bps (1.5%) → 200 bps (2% max)
+ * @param {number} currentSlippageBps - Current slippage in basis points
+ * @returns {number|null} Next slippage level in bps, or null if max reached
+ */
+function calculateNextSlippage(currentSlippageBps) {
+  const current = currentSlippageBps || SLIPPAGE_CONFIG.DEFAULT;
+  
+  if (current < 50) {
+    return 50; // Start at default if below
+  } else if (current < 100) {
+    return 100; // 0.5% → 1%
+  } else if (current < 150) {
+    return 150; // 1% → 1.5%
+  } else if (current < SLIPPAGE_CONFIG.MAX_ALLOWED) {
+    return SLIPPAGE_CONFIG.MAX_ALLOWED; // 1.5% → 2% (max)
+  } else {
+    return null; // Max reached
+  }
+}
 
 export async function POST(request) {
   const requestId = request.headers.get('x-request-id') || crypto.randomUUID();
@@ -35,6 +57,7 @@ export async function POST(request) {
       batchId, 
       inputMint, // 'USDC' (default) or 'SOL'
       outputMint, // Goal token: 'BTC', 'ETH', 'SOL'
+      amount, // Amount in smallest units (from SwapCard)
       slippageBps,
       signedTransaction, // Optional: if provided, submit instead of getting quote
       quoteResponse, // Required when submitting signed transaction
@@ -88,6 +111,7 @@ export async function POST(request) {
         batchId,
         inputMint: inputMint || 'USDC', // Default to USDC
         outputMint,
+        amount,
         slippageBps,
         userId: user.id,
         requestId,
@@ -188,7 +212,7 @@ export async function POST(request) {
  * Get quote data (internal helper - returns data object, not Response)
  * Used by both handleQuoteMode and auto-requote logic
  */
-async function getQuoteData({ goalId, batchId, inputMint, outputMint, slippageBps, userId, requestId }) {
+async function getQuoteData({ goalId, batchId, inputMint, outputMint, amount, slippageBps, userId, requestId }) {
   try {
     const finalSlippageBps = slippageBps || SLIPPAGE_CONFIG.DEFAULT;
       
@@ -291,24 +315,47 @@ async function getQuoteData({ goalId, batchId, inputMint, outputMint, slippageBp
       throw new ValidationError(`ONRAMP not confirmed. Current state: ${onrampState}`);
     }
     
+    // Always use SOL as input (no intermediate swap needed)
+    const actualInputMint = 'SOL';
+    
+    // Get swap amount from request body (user input from SwapCard)
+    // If not provided, use a fallback estimate from onramp amount
+    let swapAmount;
+    if (amount) {
+      // Amount provided in request (from SwapCard in smallest units)
+      swapAmount = fromSmallestUnits(amount, 9); // SOL has 9 decimals
+      logger.info('Using swap amount from request body', {
+        amountInSmallestUnits: amount,
+        amountInSol: swapAmount,
+        batchId,
+        requestId
+      });
+    } else {
+      // Fallback: rough estimate from onramp USDC amount (1 USDC ≈ 0.01 SOL)
+      swapAmount = onrampTransaction.amountCrypto / 100;
+      logger.warn('No amount in request body, using fallback estimate', {
+        onrampUsdc: onrampTransaction.amountCrypto,
+        estimatedSol: swapAmount,
+        batchId,
+        requestId
+      });
+    }
+    
     // Get token mint addresses with error handling
     // Use mainnet mints for Jupiter quotes (Jupiter API provides accurate mainnet prices)
     let inputTokenInfo, outputTokenInfo;
     try {
-      inputTokenInfo = getTokenMint(inputMint, 'mainnet');
+      inputTokenInfo = getTokenMint(actualInputMint, 'mainnet');
       outputTokenInfo = getTokenMint(outputMint, 'mainnet');
     } catch (mintError) {
       logger.error('Invalid token symbol', { 
-        inputMint, 
+        inputMint: actualInputMint, 
         outputMint, 
         error: mintError.message,
         requestId 
       });
       throw new ValidationError(`Invalid token symbol: ${mintError.message}`);
     }
-    
-    // Determine swap amount (use amount from ONRAMP transaction - should be USDC now)
-    const swapAmount = onrampTransaction.amountCrypto; // USDC amount from onramp
     
     const swapAmountInSmallestUnits = toSmallestUnits(swapAmount, inputTokenInfo.decimals);
       
@@ -370,68 +417,109 @@ async function getQuoteData({ goalId, batchId, inputMint, outputMint, slippageBp
     }
     
     // Check and create ATA for output token if needed (app wallet pays)
-    logger.info('Checking ATA for output token', {
-      outputMint: outputTokenInfo.mint,
-      userWallet: goalWithUser.user.walletAddress,
-      requestId
-    });
-    
-    try {
-      // Detect if this is a Token-2022 mint
-      const isToken2022Mint = await isToken2022(outputTokenInfo.mint);
-      
-      logger.debug('Token program detected', {
+    // Skip ATA creation for native SOL - it doesn't use token accounts
+    if (isNativeSOL(outputTokenInfo.mint)) {
+      logger.info('Skipping ATA check for native SOL', {
         outputMint: outputTokenInfo.mint,
-        isToken2022: isToken2022Mint,
+        userWallet: goalWithUser.user.walletAddress,
         requestId
       });
-      
-      // Check if ATA exists
-      const { exists: ataExists, address: ataAddress } = await checkATAExists(
-        outputTokenInfo.mint,
-        goalWithUser.user.walletAddress,
-        isToken2022Mint
-      );
-      
-      if (!ataExists) {
-        logger.info('ATA does not exist, creating with app wallet', {
-          outputMint: outputTokenInfo.mint,
-          userWallet: goalWithUser.user.walletAddress,
-          ataAddress: ataAddress.toBase58(),
-          requestId
-        });
-        
-        // Create ATA using app wallet as payer
-        const { signature, alreadyExists } = await createATAWithAppWallet(
-          outputTokenInfo.mint,
-          goalWithUser.user.walletAddress,
-          isToken2022Mint
-        );
-        
-        if (!alreadyExists) {
-          logger.info('ATA created successfully', {
-            signature,
-            ataAddress: ataAddress.toBase58(),
-            requestId
-          });
-        }
-      } else {
-        logger.debug('ATA already exists', {
-          ataAddress: ataAddress.toBase58(),
-          requestId
-        });
-      }
-    } catch (ataError) {
-      logger.error('Failed to ensure ATA exists', {
-        error: ataError.message,
+    } else {
+      logger.info('Checking ATA for output token', {
         outputMint: outputTokenInfo.mint,
         userWallet: goalWithUser.user.walletAddress,
         requestId
       });
       
-      throw new ValidationError(
-        `Failed to prepare token account for ${outputMint}. Please try again or contact support.`
-      );
+      try {
+        // Detect if this is a Token-2022 mint
+        const isToken2022Mint = await isToken2022(outputTokenInfo.mint);
+        
+        logger.debug('Token program detected', {
+          outputMint: outputTokenInfo.mint,
+          isToken2022: isToken2022Mint,
+          requestId
+        });
+        
+        // Check if ATA exists
+        const { exists: ataExists, address: ataAddress } = await checkATAExists(
+          outputTokenInfo.mint,
+          goalWithUser.user.walletAddress,
+          isToken2022Mint
+        );
+        
+        if (!ataExists) {
+          logger.info('ATA does not exist, attempting to create with app wallet', {
+            outputMint: outputTokenInfo.mint,
+            userWallet: goalWithUser.user.walletAddress,
+            ataAddress: ataAddress.toBase58(),
+            requestId
+          });
+          
+          try {
+            // Try to create ATA using app wallet as payer (optimization - user doesn't pay)
+            // If this fails, Jupiter will handle ATA creation in the swap transaction
+            const { signature, alreadyExists } = await createATAWithAppWallet(
+              outputTokenInfo.mint,
+              goalWithUser.user.walletAddress,
+              isToken2022Mint
+            );
+            
+            if (!alreadyExists && signature) {
+              logger.info('ATA created successfully', {
+                signature,
+                ataAddress: ataAddress.toBase58(),
+                outputMint: outputTokenInfo.mint,
+                isToken2022: isToken2022Mint,
+                requestId
+              });
+              
+              // Store ATA creation in metadata for tracking
+              quote.ataCreated = {
+                signature,
+                address: ataAddress.toBase58(),
+                mint: outputTokenInfo.mint,
+                createdAt: new Date().toISOString(),
+              };
+            }
+          } catch (ataCreationError) {
+            // If ATA creation fails, log warning but continue
+            // Jupiter will automatically handle ATA creation in the swap transaction
+            logger.warn('ATA creation failed, but continuing - Jupiter will handle it in swap transaction', {
+              error: ataCreationError.message,
+              errorName: ataCreationError.name,
+              outputMint: outputTokenInfo.mint,
+              userWallet: goalWithUser.user.walletAddress,
+              ataAddress: ataAddress.toBase58(),
+              isToken2022: isToken2022Mint,
+              requestId
+            });
+            
+            // Mark that ATA creation was attempted but failed
+            quote.ataCreationAttempted = {
+              failed: true,
+              error: ataCreationError.message,
+              willBeCreatedByJupiter: true,
+            };
+            // Don't throw - let Jupiter handle ATA creation
+          }
+        } else {
+          logger.debug('ATA already exists', {
+            ataAddress: ataAddress.toBase58(),
+            requestId
+          });
+        }
+      } catch (ataError) {
+        // If ATA check fails, log warning but continue
+        // Jupiter will automatically handle ATA creation in the swap transaction
+        logger.warn('ATA check failed, but continuing - Jupiter will handle ATA creation in swap transaction', {
+          error: ataError.message,
+          outputMint: outputTokenInfo.mint,
+          userWallet: goalWithUser.user.walletAddress,
+          requestId
+        });
+        // Don't throw - let Jupiter handle ATA creation
+      }
     }
     
     // Get swap transaction (unsigned)
@@ -572,9 +660,9 @@ async function getQuoteData({ goalId, batchId, inputMint, outputMint, slippageBp
 /**
  * Handle quote mode (Step A) - wraps getQuoteData in Response
  */
-async function handleQuoteMode({ goalId, batchId, inputMint, outputMint, slippageBps, userId, requestId }) {
+async function handleQuoteMode({ goalId, batchId, inputMint, outputMint, amount, slippageBps, userId, requestId }) {
   try {
-    const quoteData = await getQuoteData({ goalId, batchId, inputMint, outputMint, slippageBps, userId, requestId });
+    const quoteData = await getQuoteData({ goalId, batchId, inputMint, outputMint, amount, slippageBps, userId, requestId });
     // If already confirmed, return transaction data, otherwise return quote data
     if (quoteData.alreadyConfirmed) {
       return Response.json({
@@ -752,11 +840,15 @@ async function handleExecuteMode({ goalId, batchId, signedTransaction, quoteResp
           
           // Fetch new quote automatically (like sher-web auto-requote pattern)
           // Use getQuoteData directly to get data object (not Response)
+          // Use amount from existing swap metadata if available, otherwise undefined (will use fallback)
+          const retryAmount = existingSwap?.meta?.inputAmount ? 
+            toSmallestUnits(existingSwap.meta.inputAmount, 9) : undefined;
           const newQuoteData = await getQuoteData({
             goalId,
             batchId,
             inputMint,
             outputMint,
+            amount: retryAmount,
             slippageBps,
             userId,
             requestId: `${requestId}-auto-requote`,
@@ -919,7 +1011,140 @@ async function handleExecuteMode({ goalId, batchId, signedTransaction, quoteResp
     blockhash = result.blockhash;
     lastValidBlockHeightFromTx = result.lastValidBlockHeight || lastValidBlockHeight;
   } catch (error) {
-    // If submission fails, record as FAILED
+    // Handle slippage errors during submission with auto-requote (similar to confirmation errors)
+    if (error instanceof SwapError && error.code === 'SLIPPAGE_EXCEEDED') {
+      logger.warn('Slippage exceeded during submission, attempting auto-requote with increased slippage', {
+        batchId,
+        requestId,
+        currentSlippage: quoteResponse.slippageBps || existingSwap?.meta?.slippageBps || SLIPPAGE_CONFIG.DEFAULT
+      });
+      
+      // Get current slippage from quote or transaction meta
+      const currentSlippageBps = quoteResponse.slippageBps || existingSwap?.meta?.slippageBps || SLIPPAGE_CONFIG.DEFAULT;
+      const slippageRetryCount = existingSwap?.meta?.slippageRetryCount || 0;
+      const maxSlippageRetries = 2; // Limit to 2 retries
+      
+      // Check if we can retry (haven't exceeded max retries)
+      if (slippageRetryCount < maxSlippageRetries) {
+        const nextSlippageBps = calculateNextSlippage(currentSlippageBps);
+        
+        if (nextSlippageBps && nextSlippageBps <= SLIPPAGE_CONFIG.MAX_ALLOWED) {
+          logger.info('Attempting auto-requote with increased slippage (submission error)', {
+            currentSlippageBps,
+            nextSlippageBps,
+            slippageRetryCount: slippageRetryCount + 1,
+            batchId,
+            requestId
+          });
+          
+          try {
+            // Get token info from existing quote or transaction meta
+            // Handle all coin types: SOL, USDC, BTC, ETH
+            const inputMint = quoteResponse.inputMint || existingSwap?.meta?.inputMint || 'USDC';
+            const outputMint = quoteResponse.outputMint || existingSwap?.meta?.outputMint || goal.coin;
+            
+            // Fetch new quote with increased slippage (works for all coins via getQuoteData)
+            // Use amount from existing swap metadata if available, otherwise undefined (will use fallback)
+            const retryAmount = existingSwap?.meta?.inputAmount ? 
+              toSmallestUnits(existingSwap.meta.inputAmount, 9) : undefined;
+            const newQuoteData = await getQuoteData({
+              goalId,
+              batchId,
+              inputMint,
+              outputMint,
+              amount: retryAmount,
+              slippageBps: nextSlippageBps,
+              userId,
+              requestId: `${requestId}-slippage-retry-submission-${slippageRetryCount + 1}`,
+            });
+            
+            if (newQuoteData.success && newQuoteData.quote) {
+              logger.info('Auto re-quote with increased slippage successful (submission error)', {
+                newSlippageBps: nextSlippageBps,
+                newQuoteId: newQuoteData.quote.quoteId,
+                inputMint,
+                outputMint,
+                batchId,
+                requestId
+              });
+              
+              // Update transaction meta with slippage retry info
+              const swapTxnToUpdate = existingSwap || await prisma.transaction.findFirst({
+                where: { batchId, type: 'SWAP' }
+              });
+              
+              if (swapTxnToUpdate) {
+                await prisma.transaction.update({
+                  where: { id: swapTxnToUpdate.id },
+                  data: {
+                    meta: {
+                      ...swapTxnToUpdate.meta,
+                      state: 'FAILED',
+                      error: 'Slippage exceeded during submission - auto-requoting with increased slippage',
+                      errorCode: 'SLIPPAGE_EXCEEDED',
+                      slippageRetryCount: slippageRetryCount + 1,
+                      originalSlippageBps: existingSwap?.meta?.originalSlippageBps || currentSlippageBps,
+                      currentSlippageBps: nextSlippageBps,
+                      autoReQuoted: true,
+                    },
+                  },
+                });
+              }
+              
+              // Return retryable error response with new quote (same format as confirmation handler)
+              // This works for all coin types (SOL, USDC, BTC, ETH) since getQuoteData handles them all
+              return Response.json({
+                success: false,
+                retryable: true,
+                error: {
+                  code: 'SLIPPAGE_EXCEEDED',
+                  message: `Slippage exceeded. New quote fetched with ${(nextSlippageBps / 100).toFixed(1)}% slippage tolerance - please re-sign and try again.`,
+                },
+                newQuote: newQuoteData.quote,
+                newSwapTransaction: newQuoteData.swapTransaction,
+                newLastValidBlockHeight: newQuoteData.lastValidBlockHeight,
+                newSlippageBps: nextSlippageBps,
+              }, { status: 400 });
+            } else {
+              logger.error('Auto re-quote with increased slippage failed (submission error)', {
+                error: newQuoteData.error,
+                inputMint,
+                outputMint,
+                batchId,
+                requestId
+              });
+              // Fall through to normal error handling
+            }
+          } catch (requoteError) {
+            logger.error('Auto re-quote with increased slippage exception (submission error)', {
+              error: requoteError.message,
+              batchId,
+              requestId,
+              stack: requoteError.stack
+            });
+            // Fall through to normal error handling
+          }
+        } else {
+          logger.warn('Max slippage reached, cannot auto-requote (submission error)', {
+            currentSlippageBps,
+            maxSlippage: SLIPPAGE_CONFIG.MAX_ALLOWED,
+            batchId,
+            requestId
+          });
+          // Fall through to normal error handling
+        }
+      } else {
+        logger.warn('Max slippage retries reached (submission error)', {
+          slippageRetryCount,
+          maxSlippageRetries,
+          batchId,
+          requestId
+        });
+        // Fall through to normal error handling
+      }
+    }
+    
+    // If submission fails (or auto-requote not possible), record as FAILED
     if (existingSwap) {
       await prisma.transaction.update({
         where: { id: existingSwap.id },
@@ -928,6 +1153,7 @@ async function handleExecuteMode({ goalId, batchId, signedTransaction, quoteResp
             ...existingSwap.meta,
             state: 'FAILED',
             error: error.message,
+            errorCode: error.code,
           },
         },
       });
@@ -976,6 +1202,9 @@ async function handleExecuteMode({ goalId, batchId, signedTransaction, quoteResp
           outputMint: outputTokenInfo.mint,
         quoteOutAmountRaw: quoteResponse.outAmount,
           quoteOutAmountDecimals: outputTokenInfo.decimals,
+          slippageBps: quoteResponse.slippageBps || SLIPPAGE_CONFIG.DEFAULT,
+          originalSlippageBps: quoteResponse.slippageBps || SLIPPAGE_CONFIG.DEFAULT,
+          slippageRetryCount: 0,
       },
     },
     update: {
@@ -985,6 +1214,9 @@ async function handleExecuteMode({ goalId, batchId, signedTransaction, quoteResp
         state: 'SWAP_SUBMITTED',
         expiresAt: quoteResponse.expiresAt,
         quoteId: quoteResponse.quoteId,
+        slippageBps: quoteResponse.slippageBps || existingSwap?.meta?.slippageBps || SLIPPAGE_CONFIG.DEFAULT,
+        originalSlippageBps: existingSwap?.meta?.originalSlippageBps || quoteResponse.slippageBps || SLIPPAGE_CONFIG.DEFAULT,
+        slippageRetryCount: existingSwap?.meta?.slippageRetryCount || 0,
       },
     },
   });
@@ -1002,7 +1234,128 @@ async function handleExecuteMode({ goalId, batchId, signedTransaction, quoteResp
       confirmed = true;
     }
   } catch (error) {
-    // If confirmation fails, record as FAILED
+    // Handle slippage errors with auto-requote (similar to quote expiration)
+    if (error instanceof SwapError && error.code === 'SLIPPAGE_EXCEEDED') {
+      logger.warn('Slippage exceeded during confirmation, attempting auto-requote with increased slippage', {
+        batchId,
+        requestId,
+        currentSlippage: quoteResponse.slippageBps || existingSwap?.meta?.slippageBps || SLIPPAGE_CONFIG.DEFAULT
+      });
+      
+      // Get current slippage from quote or transaction meta
+      const currentSlippageBps = quoteResponse.slippageBps || existingSwap?.meta?.slippageBps || SLIPPAGE_CONFIG.DEFAULT;
+      const slippageRetryCount = existingSwap?.meta?.slippageRetryCount || 0;
+      const maxSlippageRetries = 2; // Limit to 2 retries
+      
+      // Check if we can retry (haven't exceeded max retries)
+      if (slippageRetryCount < maxSlippageRetries) {
+        const nextSlippageBps = calculateNextSlippage(currentSlippageBps);
+        
+        if (nextSlippageBps && nextSlippageBps <= SLIPPAGE_CONFIG.MAX_ALLOWED) {
+          logger.info('Attempting auto-requote with increased slippage', {
+            currentSlippageBps,
+            nextSlippageBps,
+            slippageRetryCount: slippageRetryCount + 1,
+            batchId,
+            requestId
+          });
+          
+          try {
+            // Get token info from existing quote or transaction
+            const inputMint = quoteResponse.inputMint || existingSwap?.meta?.inputMint || 'USDC';
+            const outputMint = quoteResponse.outputMint || existingSwap?.meta?.outputMint || goal.coin;
+            
+            // Fetch new quote with increased slippage
+            // Use amount from existing swap metadata if available, otherwise undefined (will use fallback)
+            const retryAmount = existingSwap?.meta?.inputAmount ? 
+              toSmallestUnits(existingSwap.meta.inputAmount, 9) : undefined;
+            const newQuoteData = await getQuoteData({
+              goalId,
+              batchId,
+              inputMint,
+              outputMint,
+              amount: retryAmount,
+              slippageBps: nextSlippageBps,
+              userId,
+              requestId: `${requestId}-slippage-retry-${slippageRetryCount + 1}`,
+            });
+            
+            if (newQuoteData.success && newQuoteData.quote) {
+              logger.info('Auto re-quote with increased slippage successful', {
+                newSlippageBps: nextSlippageBps,
+                newQuoteId: newQuoteData.quote.quoteId,
+                batchId,
+                requestId
+              });
+              
+              // Update transaction meta with slippage retry info
+              await prisma.transaction.update({
+                where: { id: swapTxn.id },
+                data: {
+                  meta: {
+                    ...swapTxn.meta,
+                    state: 'FAILED',
+                    error: 'Slippage exceeded - auto-requoting with increased slippage',
+                    errorCode: 'SLIPPAGE_EXCEEDED',
+                    slippageRetryCount: slippageRetryCount + 1,
+                    originalSlippageBps: existingSwap?.meta?.originalSlippageBps || currentSlippageBps,
+                    currentSlippageBps: nextSlippageBps,
+                    autoReQuoted: true,
+                  },
+                },
+              });
+              
+              // Return retryable error response with new quote (similar to QUOTE_EXPIRED)
+              return Response.json({
+                success: false,
+                retryable: true,
+                error: {
+                  code: 'SLIPPAGE_EXCEEDED',
+                  message: `Slippage exceeded. New quote fetched with ${(nextSlippageBps / 100).toFixed(1)}% slippage tolerance - please re-sign and try again.`,
+                },
+                newQuote: newQuoteData.quote,
+                newSwapTransaction: newQuoteData.swapTransaction,
+                newLastValidBlockHeight: newQuoteData.lastValidBlockHeight,
+                newSlippageBps: nextSlippageBps,
+              }, { status: 400 });
+            } else {
+              logger.error('Auto re-quote with increased slippage failed', {
+                error: newQuoteData.error,
+                batchId,
+                requestId
+              });
+              // Fall through to normal error handling
+            }
+          } catch (requoteError) {
+            logger.error('Auto re-quote with increased slippage exception', {
+              error: requoteError.message,
+              batchId,
+              requestId,
+              stack: requoteError.stack
+            });
+            // Fall through to normal error handling
+          }
+        } else {
+          logger.warn('Max slippage reached, cannot auto-requote', {
+            currentSlippageBps,
+            maxSlippage: SLIPPAGE_CONFIG.MAX_ALLOWED,
+            batchId,
+            requestId
+          });
+          // Fall through to normal error handling
+        }
+      } else {
+        logger.warn('Max slippage retries reached', {
+          slippageRetryCount,
+          maxSlippageRetries,
+          batchId,
+          requestId
+        });
+        // Fall through to normal error handling
+      }
+    }
+    
+    // If confirmation fails (or auto-requote not possible), record as FAILED
     await prisma.transaction.update({
       where: { id: swapTxn.id },
       data: {

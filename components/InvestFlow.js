@@ -5,6 +5,7 @@ import { useSolanaWallet, signSolanaTransaction } from '@/lib/solana-wallet';
 import InvestmentStatus from './InvestmentStatus';
 import CancelInvestmentModal from './CancelInvestmentModal';
 import RetryCard from './RetryCard';
+import SwapCard from './SwapCard';
 import { useToast } from './ToastContainer';
 import { launchCelebration } from '@/lib/celebration';
 import { getInvestmentSuccessMessage } from '@/lib/celebrationMessages';
@@ -32,7 +33,21 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
   const [solBalance, setSolBalance] = useState(null);
   const [solBalanceLoading, setSolBalanceLoading] = useState(false);
   const [quoteExpiresIn, setQuoteExpiresIn] = useState(null);
+  const [slippageRetryCount, setSlippageRetryCount] = useState(0); // Track slippage retry attempts
+  const [currentSlippageBps, setCurrentSlippageBps] = useState(50); // Current slippage in basis points (default 0.5%)
+  const [useSwapCard, setUseSwapCard] = useState(true); // Toggle to use new SwapCard UI
   const MIN_INVEST_USDC = 0.00001;
+  
+  // Guard against React StrictMode double mounting in development
+  const hasMountedRef = useRef(false);
+  
+  // Helper function to check if quote is expired
+  const isQuoteExpired = () => {
+    if (!quote || !quote.expiresAt) return false;
+    const now = Date.now();
+    const expiresAt = new Date(quote.expiresAt).getTime();
+    return now >= expiresAt;
+  };
 
   // Fetch goal info and progress
   useEffect(() => {
@@ -76,14 +91,6 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
 
     return () => clearInterval(interval);
   }, [quote]);
-
-  // Auto re-quote when quote expires or is about to expire
-  useEffect(() => {
-    if (quoteExpiresIn !== null && quoteExpiresIn <= 10 && quoteExpiresIn > 0 && currentStep === 'signing' && !loading) {
-      console.log('[InvestFlow] Quote expiring soon, auto re-quoting...');
-      handleQuote();
-    }
-  }, [quoteExpiresIn, currentStep, loading]);
 
   const fetchGoalProgress = async () => {
     try {
@@ -145,6 +152,9 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
 
   // Step 1: Onramp
   const handleOnramp = async (skipAutoQuote = false) => {
+    // Reset slippage state when starting new investment
+    setSlippageRetryCount(0);
+    setCurrentSlippageBps(50); // Reset to default 0.5%
     const numericAmount = Number(amountUsdc);
     console.log('[TEST] Starting Onramp...', { goalId, amountUsdc: numericAmount, skipAutoQuote });
     
@@ -201,17 +211,17 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
 
       // Check if response indicates success
       if (response.ok && data.success) {
-        showNotification('Funds received! Getting swap quote...', 'success');
-        setCurrentStep('quoting');
+        showNotification('Onramp simulation complete! Ready to swap.', 'success');
         
-        if (!skipAutoQuote) {
-          // Automatically proceed to quote (normal flow)
-          await handleQuote(newBatchId);
-        } else {
-          // Stop here for testing
-          setLoading(false);
-          console.log('[TEST] Onramp complete, stopping (debug mode)');
-        }
+        // Go directly to SwapCard (SOL → goal crypto)
+        setCurrentStep('signing');
+        setLoading(false);
+        
+        console.log('[TEST] Onramp complete, ready for SOL swap', {
+          batchId: newBatchId,
+          goalCoin,
+          skipAutoQuote
+        });
       } else {
         // Enhanced error extraction from multiple possible locations
         const errorCode = data.error?.code || data.code || 'UNKNOWN_ERROR';
@@ -288,6 +298,7 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
         batchId: activeBatchId,
         inputMint: 'USDC',
         outputMint: goalCoin,
+        slippageBps: currentSlippageBps, // Use current slippage setting
         mode: 'quote',
       };
       
@@ -326,6 +337,10 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
         setQuote(data.quote);
         setSwapTransaction(data.swapTransaction); // Store swap transaction for signing
         setLastValidBlockHeight(data.lastValidBlockHeight); // Store for confirmation
+        // Update slippage if quote was fetched with different slippage
+        if (data.quote?.slippageBps && data.quote.slippageBps !== currentSlippageBps) {
+          setCurrentSlippageBps(data.quote.slippageBps);
+        }
         setCurrentStep('signing');
         showNotification('Quote ready! Please sign the transaction.', 'info');
         console.log('[TEST] Quote successful:', {
@@ -333,6 +348,7 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
           priceImpact: data.quote?.priceImpactPct,
           hasSwapTransaction: !!data.swapTransaction,
           lastValidBlockHeight: data.lastValidBlockHeight,
+          slippageBps: data.quote?.slippageBps || currentSlippageBps,
         });
       } else {
         // Enhanced error extraction from multiple possible locations
@@ -417,12 +433,32 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
   const handleExecuteOnly = async () => {
     console.log('[TEST] Starting Execute Only...');
     
-    const txToExecute = signedTx || swapTransaction;
+    // Guard against React StrictMode double mounting
+    if (hasMountedRef.current) {
+      console.log('[TEST] Guard: Preventing double execution from StrictMode');
+      return;
+    }
+    hasMountedRef.current = true;
+    
+    // Check if quote is expired before executing
+    if (isQuoteExpired()) {
+      const errorMsg = 'Quote has expired. Please get a new quote and sign again.';
+      setError(errorMsg);
+      setCurrentStep('signing');
+      showNotification('Quote expired. Please get a new quote and sign again.', 'error');
+      hasMountedRef.current = false; // Reset guard
+      return;
+    }
+    
+    // Only use signedTx for execution - swapTransaction is unsigned and invalid
+    const txToExecute = signedTx;
     
     if (!txToExecute) {
-      const errorMsg = 'No signed transaction available. Please sign first or run full flow.';
+      const errorMsg = 'No signed transaction available. Please sign again.';
       setError(errorMsg);
-      console.error('[TEST] Execute validation failed: No transaction to execute');
+      setCurrentStep('signing');
+      console.error('[TEST] Execute validation failed: No signed transaction to execute');
+      hasMountedRef.current = false; // Reset guard
       return;
     }
 
@@ -430,63 +466,8 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
       const errorMsg = 'Missing batchId or quote. Please run quote step first.';
       setError(errorMsg);
       console.error('[TEST] Execute validation failed:', { batchId, hasQuote: !!quote });
+      hasMountedRef.current = false; // Reset guard
       return;
-    }
-
-    // Enhanced pre-execution quote expiration check (Option B from help.txt)
-    if (quote.expiresAt) {
-      const now = Date.now();
-      const expiresAt = new Date(quote.expiresAt).getTime();
-      const bufferMs = 10000; // 10 second buffer for safety (increased from 5s)
-      const remainingMs = expiresAt - now - bufferMs;
-      
-      if (remainingMs <= 0) {
-        const expiredSeconds = Math.abs(Math.round(remainingMs / 1000));
-        console.warn('[TEST] Quote expired before execution:', {
-          expiresAt: new Date(expiresAt).toISOString(),
-          now: new Date(now).toISOString(),
-          remainingMs,
-          expiredSeconds
-        });
-        
-        // Auto re-quote like sher-web (they call getSwapInfo automatically)
-        setLoading(false); // Stop loading for this action
-        try {
-          setError('Quote expired. Fetching new quote...');
-          await handleQuote();
-          setError('New quote fetched. Please sign again before executing.');
-          setCurrentStep('signing');
-          showNotification('Quote expired. New quote fetched - please sign again.', 'info');
-          return;
-        } catch (quoteError) {
-          console.error('[TEST] Auto re-quote failed:', quoteError);
-          setError(`Quote expired and failed to fetch new quote: ${quoteError.message}. Please try again.`);
-          setCurrentStep('quoting');
-          return;
-        }
-      }
-      
-      const remainingSeconds = Math.round(remainingMs / 1000);
-      console.log(`[TEST] Quote expires in ${remainingSeconds} seconds`);
-      
-      // Proactive re-quote if less than 10 seconds remaining
-      if (remainingMs < 10000) {
-        console.warn(`[TEST] Warning: Quote expires soon (${remainingSeconds}s). Proactively re-quoting...`);
-        setLoading(false);
-        try {
-          setError('Quote about to expire. Fetching new quote...');
-          await handleQuote();
-          setError('New quote fetched. Please sign again before executing.');
-          setCurrentStep('signing');
-          showNotification('Quote about to expire. New quote fetched - please sign again.', 'info');
-          return;
-        } catch (quoteError) {
-          console.error('[TEST] Proactive re-quote failed:', quoteError);
-          // Continue with execution if proactive re-quote fails
-          console.warn('[TEST] Continuing with existing quote despite re-quote failure');
-        }
-        setLoading(true); // Resume loading if we continue
-      }
     }
 
     setLoading(true);
@@ -556,6 +537,10 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
           addToast(successMessage.title, 'success', 5000);
           
           showNotification('Investment complete!', 'success');
+          // Reset slippage state on successful completion
+          setSlippageRetryCount(0);
+          setCurrentSlippageBps(50);
+          hasMountedRef.current = false; // Reset guard on success
           setCurrentStep('complete');
           if (onSuccess) {
             onSuccess();
@@ -679,6 +664,7 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
                     addToast(successMessage.title, 'success', 5000);
                     
                     showNotification('Investment complete!', 'success');
+                    hasMountedRef.current = false; // Reset guard on success
                     setCurrentStep('complete');
                     if (onSuccess) {
                       onSuccess();
@@ -724,9 +710,128 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
             }
             return;
           }
+        } else if (errorCode === 'SLIPPAGE_EXCEEDED') {
+          // AUTO-RETRY: Handle retryable errors with new quote (like QUOTE_EXPIRED pattern)
+          if (data.retryable && data.newQuote && data.newSwapTransaction) {
+            console.log('[TEST] Slippage exceeded but auto-requoted. Re-signing with new quote...');
+            setLoading(false);
+            
+            try {
+              // Update state with new quote and transaction
+              setQuote(data.newQuote);
+              setSwapTransaction(data.newSwapTransaction);
+              setLastValidBlockHeight(data.newLastValidBlockHeight);
+              if (data.newSlippageBps) {
+                setCurrentSlippageBps(data.newSlippageBps);
+              }
+              
+              // Auto-sign new transaction (seamless retry like sher-web)
+              if (solanaWallet) {
+                setError('New quote fetched with increased slippage. Signing automatically...');
+                showNotification(`Slippage exceeded. New quote fetched with ${(data.newSlippageBps / 100).toFixed(1)}% slippage - signing automatically...`, 'info');
+                
+                const newSignedTx = await signSolanaTransaction(solanaWallet, data.newSwapTransaction);
+                setSignedTx(newSignedTx);
+                
+                // Automatically retry execution with new signed transaction
+                setError('Transaction re-signed. Retrying execution...');
+                showNotification('Transaction re-signed. Retrying execution...', 'info');
+                
+                // Small delay to update UI
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                // Retry execution
+                setLoading(true);
+                setError('');
+                setCurrentStep('executing');
+                
+                const retryRequestBody = {
+                  goalId,
+                  batchId,
+                  signedTransaction: newSignedTx,
+                  quoteResponse: data.newQuote,
+                  lastValidBlockHeight: data.newLastValidBlockHeight,
+                  mode: 'execute',
+                };
+                
+                const retryResponse = await fetch('/api/swap/execute', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  credentials: 'include',
+                  body: JSON.stringify(retryRequestBody),
+                });
+                
+                const retryData = await retryResponse.json();
+                
+                if (retryResponse.ok && retryData.success) {
+                  // Success after retry
+                  launchCelebration();
+                  const coin = goalCoin || goalInfo?.coin || 'BTC';
+                  const coinAmount = retryData.btcAmount || retryData.amount || 0;
+                  const successMessage = getInvestmentSuccessMessage(coin, coinAmount);
+                  addToast(successMessage.title, 'success', 5000);
+                  showNotification('Investment complete!', 'success');
+                  setSlippageRetryCount(0);
+                  setCurrentSlippageBps(50);
+                  hasMountedRef.current = false;
+                  setCurrentStep('complete');
+                  if (onSuccess) {
+                    onSuccess();
+                  }
+                  fetchGoalProgress();
+                  return;
+                } else {
+                  // Retry failed
+                  const retryErrorCode = retryData.error?.code || 'UNKNOWN_ERROR';
+                  const retryErrorMessage = retryData.error?.message || `Server error (status ${retryResponse.status})`;
+                  setError(`Retry failed (${retryErrorCode}): ${retryErrorMessage}. Please try again.`);
+                  setCurrentStep('signing');
+                  return;
+                }
+              } else {
+                // Wallet not available
+                setError('New quote fetched. Please sign again before executing.');
+                setCurrentStep('signing');
+                showNotification('Slippage exceeded. New quote fetched - please sign again.', 'info');
+                return;
+              }
+            } catch (retryError) {
+              console.error('[TEST] Auto retry failed:', retryError);
+              setError(`Slippage exceeded. Failed to auto-retry: ${retryError.message}. Please try again manually.`);
+              setCurrentStep('signing');
+              return;
+            }
+          } else {
+            // Fallback: Manual re-quote if auto-requote not available
+            console.log('[TEST] Slippage exceeded but no auto-requote available. Fetching new quote...');
+            setLoading(false);
+            hasMountedRef.current = false;
+            
+            showNotification("Price changed. Getting a new quote… please sign again.", "error");
+            
+            try {
+              await handleQuote();
+              setError("Slippage exceeded — new quote ready. Please sign again.");
+              setCurrentStep("signing");
+            } catch (quoteErr) {
+              console.error("[FIX] Failed fetching new quote after slippage:", quoteErr);
+              setError(`Slippage exceeded, and fetching a new quote failed: ${quoteErr.message}`);
+              setCurrentStep("quoting");
+            }
+            return;
+          }
         } else {
-          setError(`Execute step failed (${errorCode}): ${errorMessage}. Check console for details.`);
+          // Non-retryable error - show RetryCard with appropriate message
+          console.error('[TEST] Non-retryable error:', {
+            errorCode,
+            errorMessage,
+            retryable: data.retryable
+          });
+          
+          // Set error message for RetryCard
+          setError(`${errorMessage}`);
           setCurrentStep('signing');
+          hasMountedRef.current = false; // Reset guard to allow retry
         }
       }
     } catch (err) {
@@ -790,6 +895,7 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
       setCurrentStep('signing');
     } finally {
       setLoading(false);
+      hasMountedRef.current = false; // Reset guard after execution completes
     }
   };
 
@@ -872,6 +978,10 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
           addToast(successMessage.title, 'success', 5000);
           
           showNotification('Investment complete!', 'success');
+          // Reset slippage state on successful completion
+          setSlippageRetryCount(0);
+          setCurrentSlippageBps(50);
+          hasMountedRef.current = false; // Reset guard on success
           setCurrentStep('complete');
           if (onSuccess) {
             onSuccess();
@@ -915,13 +1025,9 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
           fullResponseStringified
         });
         
-        if (errorCode === 'QUOTE_EXPIRED') {
-          setError(`Quote expired (${errorCode}). Click "Re-quote" to get a new quote. Check console for details.`);
-          setCurrentStep('signing');
-        } else {
-          setError(`Swap execution failed (${errorCode}): ${errorMessage}. Check console for details.`);
-          setCurrentStep('signing');
-        }
+        // Show error for all error codes (including QUOTE_EXPIRED)
+        setError(`Swap execution failed (${errorCode}): ${errorMessage}. Check console for details.`);
+        setCurrentStep('signing');
       }
     } catch (err) {
       console.error('[TEST] Full Flow Exception:', err);
@@ -929,6 +1035,28 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
       setCurrentStep('signing');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Handle swap completion from SwapCard
+  const handleSwapComplete = async (data) => {
+    console.log('[SwapCard] Swap completed:', data);
+    
+    // Show success notification
+    showNotification('Swap completed successfully!', 'success');
+    
+    // Launch celebration
+    launchCelebration();
+    
+    // Fetch updated goal progress
+    await fetchGoalProgress();
+    
+    // Move to complete step
+    setCurrentStep('complete');
+    
+    // Call parent success callback if provided
+    if (onSuccess) {
+      onSuccess(data);
     }
   };
 
@@ -1011,6 +1139,20 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
           />
           <label htmlFor="debugMode" className="text-sm text-black cursor-pointer">
             Enable Debug Mode (Separate Test Buttons)
+          </label>
+        </div>
+
+        {/* SwapCard UI Toggle */}
+        <div className="flex items-center gap-2 mb-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
+          <input
+            type="checkbox"
+            id="useSwapCard"
+            checked={useSwapCard}
+            onChange={(e) => setUseSwapCard(e.target.checked)}
+            className="w-4 h-4"
+          />
+          <label htmlFor="useSwapCard" className="text-sm text-black cursor-pointer">
+            Use New SwapCard UI (Live Quoting)
           </label>
         </div>
         {debugMode && (
@@ -1122,25 +1264,35 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
               <>
                 <button
                   onClick={handleSignOnly}
-                  disabled={loading || !solanaWallet || !swapTransaction}
+                  disabled={loading || !solanaWallet || !swapTransaction || isQuoteExpired()}
                   className="w-full bg-purple-600 text-white px-4 py-2 rounded-md hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-sm"
                 >
-                  {loading ? 'Processing...' : 'Test Sign Only'}
+                  {loading ? 'Processing...' : isQuoteExpired() ? 'Quote Expired - Refresh Quote' : 'Test Sign Only'}
                 </button>
                 {!solanaWallet && (
                   <p className="text-xs text-gray-600 text-center">
                     Connect wallet to enable Sign button
                   </p>
                 )}
+                {isQuoteExpired() && (
+                  <p className="text-xs text-red-600 text-center">
+                    Quote expired - please refresh quote before signing
+                  </p>
+                )}
                 
                 {signedTx && (
                   <button
                     onClick={handleExecuteOnly}
-                    disabled={loading}
+                    disabled={loading || isQuoteExpired()}
                     className="w-full bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-sm"
                   >
-                    {loading ? 'Processing...' : 'Test Execute Only'}
+                    {loading ? 'Processing...' : isQuoteExpired() ? 'Quote Expired - Re-sign Required' : 'Test Execute Only'}
                   </button>
+                )}
+                {signedTx && isQuoteExpired() && (
+                  <p className="text-xs text-red-600 text-center">
+                    Quote expired - please get a new quote and sign again
+                  </p>
                 )}
               </>
             )}
@@ -1154,8 +1306,30 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
           </div>
         )}
 
-        {/* Quote Display */}
-        {quote && currentStep === 'signing' && (
+        {/* SwapCard UI (New) */}
+        {useSwapCard && currentStep === 'signing' && batchId && (() => {
+          // Calculate SOL amount from USDC (rough estimate: 1 SOL ≈ 100 USDC)
+          const APPROXIMATE_SOL_PRICE_USD = 100;
+          const initialSolAmount = amountUsdc ? (Number(amountUsdc) / APPROXIMATE_SOL_PRICE_USD).toFixed(6) : '';
+          console.log('[InvestFlow] Rendering SwapCard with goalCoin:', goalCoin, 'goalId:', goalId, 'batchId:', batchId, 'initialSolAmount:', initialSolAmount);
+          
+          return (
+            <div className="mb-4">
+              <SwapCard
+                goalId={goalId}
+                batchId={batchId}
+                goalCoin={goalCoin}
+                inputMint="SOL"
+                initialAmount={initialSolAmount}
+                onSwapComplete={handleSwapComplete}
+                className="mb-4"
+              />
+            </div>
+          );
+        })()}
+
+        {/* Quote Display (Legacy) */}
+        {!useSwapCard && quote && currentStep === 'signing' && (
           <div className="bg-white border border-gray-200 rounded-lg p-4">
             <div className="flex justify-between items-center mb-2">
               <h4 className="font-semibold text-black">Swap Quote</h4>
@@ -1187,13 +1361,20 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
                 </div>
               )}
               {!debugMode && (
-                <button
-                  onClick={handleSignAndExecute}
-                  disabled={loading || !solanaWallet}
-                  className="w-full mt-4 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-                >
-                  {loading ? 'Processing...' : 'Sign & Execute'}
-                </button>
+                <>
+                  <button
+                    onClick={handleSignAndExecute}
+                    disabled={loading || !solanaWallet || isQuoteExpired()}
+                    className="w-full mt-4 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                  >
+                    {loading ? 'Processing...' : isQuoteExpired() ? 'Quote Expired - Refresh Quote' : 'Sign & Execute'}
+                  </button>
+                  {isQuoteExpired() && (
+                    <p className="text-xs text-red-600 mt-2 text-center">
+                      Quote expired - please refresh quote before signing
+                    </p>
+                  )}
+                </>
               )}
               {!solanaWallet && (
                 <p className="text-xs text-black mt-2 text-center">

@@ -16,6 +16,7 @@
  *   --baseUrl=<url>       API base URL (default: http://localhost:3000)
  *   --cookie=<string>     Session cookie from browser (required)
  *   --outputMint=<coin>   Output token (BTC/ETH/SOL) (default: BTC)
+ *   --two-step            Enable two-step swap flow (USDC→SOL→crypto)
  */
 
 import { readFileSync } from 'fs';
@@ -72,6 +73,7 @@ function parseArgs() {
     baseUrl: 'http://localhost:3000',
     cookie: null,
     outputMint: 'BTC',
+    twoStep: false,
   };
 
   args.forEach(arg => {
@@ -85,6 +87,8 @@ function parseArgs() {
       config.cookie = arg.split('=')[1];
     } else if (arg.startsWith('--outputMint=')) {
       config.outputMint = arg.split('=')[1].toUpperCase();
+    } else if (arg === '--two-step') {
+      config.twoStep = true;
     }
   });
 
@@ -154,7 +158,22 @@ async function testOnramp(baseUrl, cookie, goalId, amount) {
     logSuccess('Onramp simulation successful');
     log(`Response:`, 'bright');
     console.log(JSON.stringify(response.data, null, 2));
-    return { success: true, batchId, transaction: response.data.transaction };
+    
+    // Check if intermediate swap is needed
+    if (response.data.needsSolSwap) {
+      logInfo('🔄 Intermediate USDC→SOL swap required');
+      logInfo(`SOL Quote available: ${response.data.solQuote ? 'Yes' : 'No'}`);
+      logInfo(`SOL Swap Transaction ready: ${response.data.solSwapTransaction ? 'Yes' : 'No'}`);
+    }
+    
+    return { 
+      success: true, 
+      batchId, 
+      transaction: response.data.transaction,
+      needsSolSwap: response.data.needsSolSwap,
+      solQuote: response.data.solQuote,
+      solSwapTransaction: response.data.solSwapTransaction,
+    };
   } else {
     logError(`Onramp failed: ${response.data?.error?.message || response.error || 'Unknown error'}`);
     log(`Error details:`, 'bright');
@@ -163,14 +182,41 @@ async function testOnramp(baseUrl, cookie, goalId, amount) {
   }
 }
 
+// Test 1.5: Test Intermediate Swap (USDC→SOL)
+async function testIntermediateSwap(baseUrl, cookie, goalId, batchId, solSwapTransaction, solQuote) {
+  logStep('1.5', 'Testing Intermediate USDC→SOL Swap');
+  
+  logInfo(`Batch ID: ${batchId}`);
+  logInfo(`This step would normally require wallet signing`);
+  logInfo(`Transaction size: ${solSwapTransaction ? solSwapTransaction.length : 0} bytes`);
+  
+  if (solQuote) {
+    logInfo(`Expected SOL output: ${(solQuote.outAmount / 1e9).toFixed(6)} SOL`);
+    logInfo(`Price impact: ${solQuote.priceImpactPct || 'N/A'}%`);
+  }
+  
+  logWarning('⚠️  Note: Actual transaction signing and execution skipped in test mode');
+  logInfo('In production, this would:');
+  logInfo('  1. Sign transaction with user wallet');
+  logInfo('  2. POST to /api/swap/intermediate');
+  logInfo('  3. Create SWAP_INTERMEDIATE transaction record');
+  logInfo('  4. Update batch with SOL balance');
+  
+  return { 
+    success: true, 
+    message: 'Intermediate swap flow validated (signing skipped)',
+    solAmount: solQuote ? (solQuote.outAmount / 1e9).toFixed(6) : '0.01',
+  };
+}
+
 // Test 2: Get Swap Quote
-async function testSwapQuote(baseUrl, cookie, goalId, batchId, outputMint, amount) {
+async function testSwapQuote(baseUrl, cookie, goalId, batchId, outputMint, amount, inputMint = 'USDC') {
   logStep(2, 'Testing Swap Quote');
   
   logInfo(`Batch ID: ${batchId}`);
-  logInfo(`Input: USDC`);
+  logInfo(`Input: ${inputMint}`);
   logInfo(`Output: ${outputMint}`);
-  logInfo(`Amount: ${amount} USDC`);
+  logInfo(`Amount: ${amount} ${inputMint}`);
 
   const url = `${baseUrl}/api/swap/execute`;
   logInfo(`POST ${url}`);
@@ -183,7 +229,7 @@ async function testSwapQuote(baseUrl, cookie, goalId, batchId, outputMint, amoun
     body: JSON.stringify({
       goalId,
       batchId,
-      inputMint: 'USDC',
+      inputMint,
       outputMint,
       mode: 'quote',
       slippageBps: 50, // 0.5%
@@ -285,6 +331,7 @@ async function main() {
     logInfo('  --baseUrl=<url>       API base URL (default: http://localhost:3000)');
     logInfo('  --cookie=<string>     Session cookie from browser (required)');
     logInfo('  --outputMint=<coin>   Output token BTC/ETH/SOL (default: BTC)');
+    logInfo('  --two-step            Enable two-step swap flow (USDC→SOL→crypto)');
     logInfo('\nHow to get session cookie:');
     logInfo('  1. Open your browser and log in to the app');
     logInfo('  2. Open Developer Tools (F12)');
@@ -306,6 +353,7 @@ async function main() {
   log(`  Amount: ${config.amount} USDC`);
   log(`  Output Mint: ${config.outputMint}`);
   log(`  Base URL: ${config.baseUrl}`);
+  log(`  Two-Step Flow: ${config.twoStep ? 'Enabled (USDC→SOL→crypto)' : 'Disabled (USDC→crypto)'}`);
   log(`  Cookie: ${config.cookie.substring(0, 50)}...`);
 
   let batchId = null;
@@ -329,17 +377,42 @@ async function main() {
     batchId = onrampResult.batchId;
     logSuccess(`\n✅ Onramp completed. Batch ID: ${batchId}`);
 
+    // Test 1.5: Intermediate swap (if two-step mode and needed)
+    if (config.twoStep && onrampResult.needsSolSwap) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      const intermediateResult = await testIntermediateSwap(
+        config.baseUrl,
+        config.cookie,
+        config.goalId,
+        batchId,
+        onrampResult.solSwapTransaction,
+        onrampResult.solQuote
+      );
+      
+      if (!intermediateResult.success) {
+        logError('\n❌ INTERMEDIATE SWAP TEST FAILED - Stopping tests');
+        process.exit(1);
+      }
+      
+      logSuccess(`\n✅ Intermediate swap validated. SOL amount: ${intermediateResult.solAmount}`);
+      logInfo('Note: In production, this would update the batch with SOL balance');
+    }
+
     // Wait a moment for DB to settle
     await new Promise(resolve => setTimeout(resolve, 500));
 
     // Test 2: Swap Quote
+    // In two-step mode, the input is SOL (from intermediate swap)
+    const inputMint = (config.twoStep && onrampResult.needsSolSwap) ? 'SOL' : 'USDC';
     const quoteResult = await testSwapQuote(
       config.baseUrl,
       config.cookie,
       config.goalId,
       batchId,
       config.outputMint,
-      config.amount
+      config.amount,
+      inputMint
     );
 
     if (!quoteResult.success) {

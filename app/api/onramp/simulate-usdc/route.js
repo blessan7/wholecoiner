@@ -156,17 +156,27 @@ export async function POST(request) {
       });
       
       if (solBalanceInSol < estimatedSolNeeded) {
+        const shortfall = estimatedSolNeeded - solBalanceInSol;
+        const swapSol = amountUsdc / APPROXIMATE_SOL_PRICE_USD;
+        
         logger.error('[ONRAMP] Insufficient SOL balance', {
           solBalance: solBalanceInSol,
           required: estimatedSolNeeded,
-          shortfall: estimatedSolNeeded - solBalanceInSol,
+          shortfall,
+          swapSol,
+          feeSol: SOL_FEE_BUFFER,
           requestId
         });
         
         throw new ValidationError(
-          `Insufficient SOL balance. You have ${solBalanceInSol.toFixed(4)} SOL but need approximately ${estimatedSolNeeded.toFixed(4)} SOL ` +
-          `(${(amountUsdc / APPROXIMATE_SOL_PRICE_USD).toFixed(4)} SOL for swap + ${SOL_FEE_BUFFER} SOL for fees). ` +
-          `Please add more SOL to your wallet.`
+          `Insufficient SOL balance for this swap.\n\n` +
+          `Current balance: ${solBalanceInSol.toFixed(6)} SOL\n` +
+          `Required: ${estimatedSolNeeded.toFixed(6)} SOL\n` +
+          `Shortfall: ${shortfall.toFixed(6)} SOL\n\n` +
+          `Breakdown:\n` +
+          `- Swap amount: ~${swapSol.toFixed(6)} SOL (${amountUsdc} USDC)\n` +
+          `- Transaction fees: ${SOL_FEE_BUFFER} SOL\n\n` +
+          `Please add at least ${shortfall.toFixed(6)} SOL to your wallet before continuing.`
         );
       }
       
