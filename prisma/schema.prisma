@@ -26,6 +26,8 @@ model User {
   
   goals           Goal[]
   notifications   Notification[]
+  adminTransfers  InternalTransfer[] @relation("AdminInitiatedTransfers")
+  sourceTransfers InternalTransfer[] @relation("SourceUserTransfers")
   
   @@map("users")
 }
@@ -91,6 +93,30 @@ model Notification {
   @@map("notifications")
 }
 
+model InternalTransfer {
+  id                 String                @id @default(cuid())
+  batchId            String                @unique @map("batch_id")
+  adminUserId        String                @map("admin_user_id")
+  adminUser          User                  @relation("AdminInitiatedTransfers", fields: [adminUserId], references: [id], onDelete: Cascade)
+  sourceUserId       String?               @map("source_user_id")
+  sourceUser         User?                 @relation("SourceUserTransfers", fields: [sourceUserId], references: [id], onDelete: Cascade)
+  sourceAddress      String                @map("source_address")
+  destinationAddress String                @map("destination_address")
+  lamports           BigInt                @map("lamports")
+  memo               String?               @map("memo")
+  signature          String?               @map("signature")
+  state              InternalTransferState @default(PREPARED)
+  metadata           Json?                 @map("metadata")
+  createdAt          DateTime              @default(now()) @map("created_at")
+  updatedAt          DateTime              @updatedAt @map("updated_at")
+
+  @@index([adminUserId])
+  @@index([sourceUserId])
+  @@index([state])
+  @@index([createdAt])
+  @@map("internal_transfers")
+}
+
 model PauseRequest {
   id              String           @id @default(cuid())
   goalId          String           @map("goal_id")
@@ -149,4 +175,11 @@ enum PauseRequestStatus {
   PENDING
   APPROVED
   REJECTED
+}
+
+enum InternalTransferState {
+  PREPARED
+  SUBMITTED
+  CONFIRMED
+  FAILED
 }
