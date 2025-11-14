@@ -1,11 +1,14 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { usePrivy } from '@privy-io/react-auth';
 import Link from 'next/link';
 import UserProfileBadge from '@/components/UserProfileBadge';
 import { getWalletAddressFromPrivy } from '@/lib/user';
+import { useToast } from '@/components/ToastContainer';
+import { launchCelebration } from '@/lib/celebration';
+import { getGoalCreationToast } from '@/lib/celebrationMessages';
 
 const COIN_OPTIONS = [
   {
@@ -41,6 +44,8 @@ const formatCurrency = (value) =>
 export default function CreateGoalPage() {
   const router = useRouter();
   const { ready, authenticated, user } = usePrivy();
+  const { addToast } = useToast();
+  const submitButtonRef = useRef(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [formData, setFormData] = useState({
@@ -212,7 +217,20 @@ export default function CreateGoalPage() {
       const data = await response.json();
 
       if (data.success) {
-        router.push('/goals');
+        // Launch celebration
+        if (submitButtonRef.current) {
+          launchCelebration({ element: submitButtonRef.current });
+        } else {
+          launchCelebration();
+        }
+        
+        // Show success toast
+        addToast(getGoalCreationToast(), 'success', 5000);
+        
+        // Small delay to let celebration be visible before redirect
+        setTimeout(() => {
+          router.push('/dashboard');
+        }, 1500);
       } else {
         setError(data.error?.message || 'Failed to create goal');
       }
@@ -304,8 +322,8 @@ export default function CreateGoalPage() {
         <div className="mx-auto max-w-6xl px-6 pb-16 pt-12 sm:px-8 md:px-10">
           <section className="rounded-3xl border border-[#292018] bg-[#17110b]/85 p-6 shadow-[0_30px_100px_rgba(0,0,0,0.65)] backdrop-blur-sm sm:p-8">
             <nav className="flex items-center gap-3 text-[10px] uppercase tracking-[0.32em] text-[var(--text-secondary)]">
-              <Link href="/goals" className="hover:text-[var(--accent)] transition-colors">
-                Goals
+              <Link href="/dashboard" className="hover:text-[var(--accent)] transition-colors">
+                Dashboard
               </Link>
               <span>•</span>
               <span className="text-[var(--text-primary)]">Create</span>
@@ -620,6 +638,7 @@ export default function CreateGoalPage() {
               </div>
               <div className="flex sm:flex-row sm:items-center">
                 <button
+                  ref={submitButtonRef}
                   type="submit"
                   disabled={loading || loadingEstimate}
                   className="btn-primary flex h-11 items-center justify-center px-8 text-sm font-semibold uppercase tracking-[0.18em] disabled:cursor-not-allowed disabled:opacity-60"

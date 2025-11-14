@@ -157,9 +157,9 @@ export default function LoginButton({ variant = 'hero' }) {
       const data = await response.json();
       console.log('User synced successfully:', data);
 
-      const targetRoute = data?.user?.twoFaEnabled ? '/auth/2fa/verify' : '/auth/2fa/setup';
-      console.log('Redirecting to', targetRoute);
-      await router.push(targetRoute);
+      // Redirect directly to dashboard
+      console.log('Redirecting to dashboard');
+      await router.push('/dashboard');
     } catch (err) {
       console.error('Error syncing user:', err);
       setError(err.message);

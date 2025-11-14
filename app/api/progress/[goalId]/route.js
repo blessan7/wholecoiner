@@ -1,4 +1,4 @@
-import { requireAuth, ensureTwoFa } from '@/lib/auth';
+import { requireAuth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { logger } from '@/lib/logger';
 import { calculateProgress, calculateEstimatedCompletion } from '@/lib/goalValidation';
@@ -15,8 +15,7 @@ export async function GET(request, { params }) {
   const { goalId } = await params;
   
   try {
-    const { user, sess } = await requireAuth(request);
-    ensureTwoFa(sess, user);
+    const { user } = await requireAuth(request);
     
     logger.info('Fetching goal progress', { goalId, userId: user.id, requestId });
     

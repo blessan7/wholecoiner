@@ -6,8 +6,7 @@ import { usePrivy } from '@privy-io/react-auth';
 
 import BreadcrumbTitle from '@/components/goal-details/BreadcrumbTitle';
 import SummaryRow from '@/components/goal-details/SummaryRow';
-import InvestPanel from '@/components/goal-details/InvestPanel';
-import TransactionsSection from '@/components/goal-details/TransactionsSection';
+import InvestNowShell from '@/components/invest/InvestNowShell';
 import FooterActions from '@/components/goal-details/FooterActions';
 import UserProfileBadge from '@/components/UserProfileBadge';
 import { formatCurrencyUSD, formatDate, formatNumber } from '@/lib/goalFormatting';
@@ -41,7 +40,7 @@ const formatDurationLabel = (estimate) => {
   return '—';
 };
 
-export default function GoalProgressPage({ params }) {
+export default function GoalProgressPage({ params, searchParams }) {
   const router = useRouter();
   const { ready, authenticated, user } = usePrivy();
   const { id: goalId } = use(params);
@@ -49,7 +48,14 @@ export default function GoalProgressPage({ params }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
-  const transactionHistoryRef = useRef(null);
+  
+  // Compute showDebug flag (localhost or ?debug=1 query param)
+  const showDebug = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const hasDebugQuery = window.location.search.includes('debug=1');
+    return isLocalhost || hasDebugQuery;
+  }, []);
 
   // Redirect if not authenticated
   useEffect(() => {
@@ -140,7 +146,6 @@ export default function GoalProgressPage({ params }) {
 
   const handleInvestSuccess = useCallback(() => {
     fetchProgress();
-    transactionHistoryRef.current?.refresh();
   }, [fetchProgress]);
 
   const handlePauseGoal = async () => {
@@ -241,10 +246,10 @@ export default function GoalProgressPage({ params }) {
           <p className="text-sm text-red-200">{error}</p>
           <button
             type="button"
-            onClick={() => router.push('/goals')}
+            onClick={() => router.push('/dashboard')}
             className="btn-ghost mt-4 px-6 py-3 text-xs font-semibold uppercase tracking-[0.18em]"
           >
-            Back to Goals
+            Back to Dashboard
           </button>
         </div>
       </div>
@@ -322,23 +327,21 @@ export default function GoalProgressPage({ params }) {
 
         <SummaryRow {...summaryData} />
 
-        <InvestPanel
-          progress={progress}
-          refreshProgress={handleInvestSuccess}
-          goalId={goalId}
-          status={progress.status}
-          onDebugOnramp={() => console.log('Debug: trigger onramp for', goalId)}
-          onDebugSwap={() => console.log('Debug: trigger swap for', goalId)}
-        />
-
-        <TransactionsSection
-          goalId={goalId}
-          onRefresh={() => transactionHistoryRef.current?.refresh()}
-          transactionsRef={transactionHistoryRef}
+        <InvestNowShell
+          goal={{
+            id: goalId,
+            coin: progress.coin,
+            targetAmount: progress.targetAmount,
+            investedAmount: progress.investedAmount,
+            status: progress.status,
+          }}
+          walletAddress={walletAddress}
+          showDebug={showDebug}
+          onSuccess={handleInvestSuccess}
         />
 
         <FooterActions
-          onBack={() => router.push('/goals')}
+          onBack={() => router.push('/dashboard')}
           onPause={handlePauseGoal}
           onResume={handleResumeGoal}
           onEdit={handleEditGoal}

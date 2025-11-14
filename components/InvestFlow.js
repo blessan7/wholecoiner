@@ -1,9 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSolanaWallet, signSolanaTransaction } from '@/lib/solana-wallet';
 import InvestmentStatus from './InvestmentStatus';
 import CancelInvestmentModal from './CancelInvestmentModal';
+import RetryCard from './RetryCard';
+import { useToast } from './ToastContainer';
+import { launchCelebration } from '@/lib/celebration';
+import { getInvestmentSuccessMessage } from '@/lib/celebrationMessages';
 
 /**
  * Complete investment flow component
@@ -11,6 +15,7 @@ import CancelInvestmentModal from './CancelInvestmentModal';
  */
 export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
   const solanaWallet = useSolanaWallet();
+  const { addToast } = useToast();
   const [amountUsdc, setAmountUsdc] = useState(1); // Default to 1 USDC for testing mode
   const [batchId, setBatchId] = useState(null);
   const [currentStep, setCurrentStep] = useState('input'); // input, onramping, quoting, signing, executing, complete
@@ -18,11 +23,16 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
   const [error, setError] = useState('');
   const [quote, setQuote] = useState(null);
   const [swapTransaction, setSwapTransaction] = useState(null);
+  const [lastValidBlockHeight, setLastValidBlockHeight] = useState(null);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [goalInfo, setGoalInfo] = useState(null);
   const [progressInfo, setProgressInfo] = useState(null);
   const [debugMode, setDebugMode] = useState(true); // Enable debug mode by default
   const [signedTx, setSignedTx] = useState(null); // Store signed transaction separately
+  const [solBalance, setSolBalance] = useState(null);
+  const [solBalanceLoading, setSolBalanceLoading] = useState(false);
+  const [quoteExpiresIn, setQuoteExpiresIn] = useState(null);
+  const MIN_INVEST_USDC = 0.00001;
 
   // Fetch goal info and progress
   useEffect(() => {
@@ -30,6 +40,50 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
       fetchGoalProgress();
     }
   }, [goalId]);
+
+  // Fetch SOL balance on mount and when step changes
+  useEffect(() => {
+    if (currentStep === 'input') {
+      fetchSolBalance();
+    }
+  }, [currentStep]);
+
+  // Quote expiry countdown
+  useEffect(() => {
+    if (!quote || !quote.expiresAt) {
+      setQuoteExpiresIn(null);
+      return;
+    }
+
+    const updateCountdown = () => {
+      const now = Date.now();
+      const expiresAt = new Date(quote.expiresAt).getTime();
+      const remainingMs = expiresAt - now;
+      
+      if (remainingMs <= 0) {
+        setQuoteExpiresIn(0);
+        return;
+      }
+      
+      setQuoteExpiresIn(Math.floor(remainingMs / 1000));
+    };
+
+    // Update immediately
+    updateCountdown();
+
+    // Update every second
+    const interval = setInterval(updateCountdown, 1000);
+
+    return () => clearInterval(interval);
+  }, [quote]);
+
+  // Auto re-quote when quote expires or is about to expire
+  useEffect(() => {
+    if (quoteExpiresIn !== null && quoteExpiresIn <= 10 && quoteExpiresIn > 0 && currentStep === 'signing' && !loading) {
+      console.log('[InvestFlow] Quote expiring soon, auto re-quoting...');
+      handleQuote();
+    }
+  }, [quoteExpiresIn, currentStep, loading]);
 
   const fetchGoalProgress = async () => {
     try {
@@ -53,14 +107,25 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
     }
   };
 
+  const fetchSolBalance = async () => {
+    setSolBalanceLoading(true);
+    try {
+      const response = await fetch('/api/wallet/sol-balance', {
+        credentials: 'include',
+      });
+      const data = await response.json();
+      if (data.success) {
+        setSolBalance(data.balance.sol);
+      }
+    } catch (err) {
+      console.error('Failed to fetch SOL balance:', err);
+    } finally {
+      setSolBalanceLoading(false);
+    }
+  };
+
   const showNotification = (message, type = 'info') => {
-    // Simple notification - could be enhanced with toast library
-    const colors = {
-      success: 'bg-green-500',
-      error: 'bg-red-500',
-      info: 'bg-blue-500',
-    };
-    // For now, just console log - can integrate toast library later
+    addToast(message, type);
     console.log(`[${type.toUpperCase()}] ${message}`);
   };
 
@@ -80,10 +145,11 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
 
   // Step 1: Onramp
   const handleOnramp = async (skipAutoQuote = false) => {
-    console.log('[TEST] Starting Onramp...', { goalId, amountUsdc, skipAutoQuote });
+    const numericAmount = Number(amountUsdc);
+    console.log('[TEST] Starting Onramp...', { goalId, amountUsdc: numericAmount, skipAutoQuote });
     
-    if (!amountUsdc || amountUsdc < 1) {
-      const errorMsg = 'Amount must be at least 1 USDC';
+    if (!numericAmount || Number.isNaN(numericAmount) || numericAmount < MIN_INVEST_USDC) {
+      const errorMsg = `Amount must be at least ${MIN_INVEST_USDC} USDC`;
       setError(errorMsg);
       console.error('[TEST] Onramp validation failed:', errorMsg);
       return;
@@ -98,7 +164,7 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
     try {
       const requestBody = {
         goalId,
-        amountUsdc: parseFloat(amountUsdc),
+        amountUsdc: numericAmount,
         batchId: newBatchId,
       };
       
@@ -259,12 +325,14 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
       if (response.ok && data.success) {
         setQuote(data.quote);
         setSwapTransaction(data.swapTransaction); // Store swap transaction for signing
+        setLastValidBlockHeight(data.lastValidBlockHeight); // Store for confirmation
         setCurrentStep('signing');
         showNotification('Quote ready! Please sign the transaction.', 'info');
         console.log('[TEST] Quote successful:', {
           outputAmount: data.quote?.outputAmount,
           priceImpact: data.quote?.priceImpactPct,
           hasSwapTransaction: !!data.swapTransaction,
+          lastValidBlockHeight: data.lastValidBlockHeight,
         });
       } else {
         // Enhanced error extraction from multiple possible locations
@@ -431,6 +499,7 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
         batchId,
         signedTransaction: txToExecute,
         quoteResponse: quote,
+        lastValidBlockHeight,
         mode: 'execute',
       };
       
@@ -439,6 +508,7 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
         batchId,
         hasSignedTx: !!txToExecute,
         hasQuote: !!quote,
+        lastValidBlockHeight,
       });
 
       const response = await fetch('/api/swap/execute', {
@@ -476,6 +546,15 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
           showNotification('Transaction submitted! Waiting for confirmation...', 'info');
           setCurrentStep('executing');
         } else {
+          // Launch celebration for investment success
+          launchCelebration();
+          
+          // Show enhanced toast with coin-specific message
+          const coin = goalCoin || goalInfo?.coin || 'BTC';
+          const coinAmount = data.btcAmount || data.amount || 0;
+          const successMessage = getInvestmentSuccessMessage(coin, coinAmount);
+          addToast(successMessage.title, 'success', 5000);
+          
           showNotification('Investment complete!', 'success');
           setCurrentStep('complete');
           if (onSuccess) {
@@ -531,6 +610,7 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
               // Update state with new quote and transaction
               setQuote(data.newQuote);
               setSwapTransaction(data.newSwapTransaction);
+              setLastValidBlockHeight(data.newLastValidBlockHeight);
               if (data.newLastValidBlockHeight) {
                 // Store lastValidBlockHeight if needed
                 console.log('[TEST] New lastValidBlockHeight:', data.newLastValidBlockHeight);
@@ -563,6 +643,7 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
                   batchId,
                   signedTransaction: newSignedTx,
                   quoteResponse: data.newQuote,
+                  lastValidBlockHeight: data.newLastValidBlockHeight,
                   mode: 'execute',
                 };
                 
@@ -571,6 +652,7 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
                   batchId,
                   hasSignedTx: !!newSignedTx,
                   hasQuote: !!data.newQuote,
+                  lastValidBlockHeight: data.newLastValidBlockHeight,
                 });
 
                 const retryResponse = await fetch('/api/swap/execute', {
@@ -587,6 +669,15 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
                     showNotification('Transaction submitted! Waiting for confirmation...', 'info');
                     setCurrentStep('executing');
                   } else {
+                    // Launch celebration for investment success
+                    launchCelebration();
+                    
+                    // Show enhanced toast with coin-specific message
+                    const coin = goalCoin || goalInfo?.coin || 'BTC';
+                    const coinAmount = retryData.btcAmount || retryData.amount || 0;
+                    const successMessage = getInvestmentSuccessMessage(coin, coinAmount);
+                    addToast(successMessage.title, 'success', 5000);
+                    
                     showNotification('Investment complete!', 'success');
                     setCurrentStep('complete');
                     if (onSuccess) {
@@ -735,6 +826,7 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
           batchId,
           signedTransaction: signedTx,
           quoteResponse: quote,
+          lastValidBlockHeight,
           mode: 'execute',
         }),
       });
@@ -770,6 +862,15 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
           // Status component will handle polling
         } else {
           // Confirmed immediately
+          // Launch celebration for investment success
+          launchCelebration();
+          
+          // Show enhanced toast with coin-specific message
+          const coin = goalCoin || goalInfo?.coin || 'BTC';
+          const coinAmount = data.btcAmount || data.amount || 0;
+          const successMessage = getInvestmentSuccessMessage(coin, coinAmount);
+          addToast(successMessage.title, 'success', 5000);
+          
           showNotification('Investment complete!', 'success');
           setCurrentStep('complete');
           if (onSuccess) {
@@ -883,6 +984,22 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
           Enter the amount in USDC to invest in {goalCoin}
         </p>
 
+        {/* SOL Balance Warning */}
+        {solBalance !== null && (
+          <div className={`p-3 border rounded-md ${
+            solBalance < 0.02 ? 'bg-yellow-50 border-yellow-200' : 'bg-blue-50 border-blue-200'
+          }`}>
+            <p className="text-sm font-medium text-black">
+              SOL Balance: {solBalance.toFixed(4)} SOL
+            </p>
+            {solBalance < 0.02 && (
+              <p className="text-xs text-yellow-700 mt-1">
+                ⚠️ Low SOL balance. You need SOL to pay for swap transactions. Please add more SOL to your wallet.
+              </p>
+            )}
+          </div>
+        )}
+
         {/* Debug Mode Toggle */}
         <div className="flex items-center gap-2 mb-4 p-3 bg-gray-50 border border-gray-200 rounded-md">
           <input
@@ -913,14 +1030,14 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
             <input
               type="number"
               id="amountUsdc"
-              min="1"
-              step="0.1"
+              min={MIN_INVEST_USDC}
+              step={MIN_INVEST_USDC}
               value={amountUsdc}
               onChange={(e) => setAmountUsdc(e.target.value)}
               className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
               required
             />
-            <p className="text-xs text-black mt-1">Minimum: 1 USDC (Testing Mode)</p>
+            <p className="text-xs text-black mt-1">Minimum: {MIN_INVEST_USDC} USDC</p>
           </div>
 
           {error && (
@@ -1040,7 +1157,18 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
         {/* Quote Display */}
         {quote && currentStep === 'signing' && (
           <div className="bg-white border border-gray-200 rounded-lg p-4">
-            <h4 className="font-semibold mb-2 text-black">Swap Quote</h4>
+            <div className="flex justify-between items-center mb-2">
+              <h4 className="font-semibold text-black">Swap Quote</h4>
+              {quoteExpiresIn !== null && (
+                <span className={`text-xs font-medium px-2 py-1 rounded ${
+                  quoteExpiresIn <= 10 ? 'bg-red-100 text-red-700' : 
+                  quoteExpiresIn <= 30 ? 'bg-yellow-100 text-yellow-700' : 
+                  'bg-green-100 text-green-700'
+                }`}>
+                  {quoteExpiresIn > 0 ? `Expires in ${quoteExpiresIn}s` : 'Expired - Re-quoting...'}
+                </span>
+              )}
+            </div>
             <div className="space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-black">Input:</span>
@@ -1077,11 +1205,21 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
         )}
 
         {error && (
-          <div className="bg-red-50 border border-red-200 rounded p-3">
-            <p className="text-sm text-red-700 font-semibold">Error:</p>
-            <p className="text-sm text-red-700">{error}</p>
-            <p className="text-xs text-red-600 mt-2">Check browser console for detailed logs</p>
-          </div>
+          <RetryCard
+            error={error}
+            onRetry={() => {
+              setError('');
+              if (currentStep === 'signing' || currentStep === 'quoting') {
+                handleQuote();
+              } else if (currentStep === 'input' || currentStep === 'onramping') {
+                handleOnramp(debugMode);
+              }
+            }}
+            onCancel={() => {
+              setError('');
+              setCurrentStep('input');
+            }}
+          />
         )}
 
         <CancelInvestmentModal

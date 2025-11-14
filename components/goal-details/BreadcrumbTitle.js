@@ -31,8 +31,8 @@ export default function BreadcrumbTitle({ asset, goalName, status, createdAt }) 
       className="flex flex-col gap-6"
     >
       <nav className="flex items-center gap-2 text-[11px] uppercase tracking-[0.26em] text-[var(--text-secondary)]">
-        <Link href="/goals" className="hover:text-[var(--accent)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/70">
-          Goals
+        <Link href="/dashboard" className="hover:text-[var(--accent)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/70">
+          Dashboard
         </Link>
         <span>•</span>
         <span className="text-[var(--text-primary)]">Goal Details</span>
@@ -58,7 +58,7 @@ export default function BreadcrumbTitle({ asset, goalName, status, createdAt }) 
         </div>
 
         <Link
-          href="/goals"
+          href="/dashboard"
           className="btn-ghost flex items-center gap-2 rounded-full px-5 py-3 text-xs font-semibold uppercase tracking-[0.2em]"
         >
           <span className="material-symbols-outlined text-base">arrow_back</span>

@@ -155,3 +155,37 @@ button:focus-visible {
 .ticker-scroll::-webkit-scrollbar {
   display: none;
 }
+
+@keyframes scroll {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-scroll {
+  animation: scroll 60s linear infinite;
+}
+
+.animate-scroll:hover {
+  animation-play-state: paused;
+}
+
+/* Success glow animation for buttons */
+@keyframes glow {
+  0% {
+    box-shadow: 0 0 0px rgba(246, 197, 109, 0.6);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(246, 197, 109, 0.8), 0 0 40px rgba(255, 159, 28, 0.4);
+  }
+  100% {
+    box-shadow: 0 0 0px rgba(246, 197, 109, 0);
+  }
+}
+
+.animate-glow {
+  animation: glow 0.9s ease-out;
+}

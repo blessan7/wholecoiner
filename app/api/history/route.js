@@ -1,4 +1,4 @@
-import { requireAuth, ensureTwoFa } from '@/lib/auth';
+import { requireAuth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { logger } from '@/lib/logger';
 import { groupByBatchId } from '@/lib/history';
@@ -23,9 +23,8 @@ export async function GET(request) {
   let user = null;
 
   try {
-    const { user: authUser, sess } = await requireAuth(request);
+    const { user: authUser } = await requireAuth(request);
     user = authUser;
-    ensureTwoFa(sess, user);
 
     const { searchParams } = new URL(request.url);
     const goalId = searchParams.get('goalId');

@@ -1,19 +1,18 @@
-import { requireAuth, ensureTwoFa } from '@/lib/auth';
+import { requireAuth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { logger } from '@/lib/logger';
 
 /**
  * GET /api/user
  * Get current authenticated user's profile
- * Protected route - requires authentication and 2FA verification
+ * Protected route - requires authentication
  */
 export async function GET(request) {
   const requestId = request.headers.get('x-request-id');
   
   try {
-    // Require authentication and 2FA
-    const { user, sess } = await requireAuth(request);
-    ensureTwoFa(sess, user);
+    // Require authentication
+    const { user } = await requireAuth(request);
 
     logger.debug('Fetching user profile', { userId: user.id, requestId });
 
@@ -25,7 +24,6 @@ export async function GET(request) {
         privyId: true,
         email: true,
         walletAddress: true,
-        twoFaEnabled: true,
         createdAt: true,
         updatedAt: true,
         _count: {
@@ -59,7 +57,6 @@ export async function GET(request) {
           privyId: userData.privyId,
           email: userData.email,
           walletAddress: userData.walletAddress,
-          twoFaEnabled: userData.twoFaEnabled,
           createdAt: userData.createdAt,
           updatedAt: userData.updatedAt,
           stats: {
@@ -95,15 +92,14 @@ export async function GET(request) {
 /**
  * PATCH /api/user
  * Update current user's profile settings
- * Protected route - requires authentication and 2FA verification
+ * Protected route - requires authentication
  */
 export async function PATCH(request) {
   const requestId = request.headers.get('x-request-id');
 
   try {
-    // Require authentication and 2FA
-    const { user, sess } = await requireAuth(request);
-    ensureTwoFa(sess, user);
+    // Require authentication
+    const { user } = await requireAuth(request);
 
     const body = await request.json();
 
@@ -129,7 +125,6 @@ export async function PATCH(request) {
         privyId: true,
         email: true,
         walletAddress: true,
-        twoFaEnabled: true,
         updatedAt: true,
       },
     });

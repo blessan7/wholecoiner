@@ -1,4 +1,4 @@
-import { requireAuth, ensureTwoFa } from '@/lib/auth';
+import { requireAuth } from '@/lib/auth';
 import { getPricesInUSD } from '@/lib/prices';
 import { getPopularTokenSymbols } from '@/lib/popular-tokens';
 import { logger } from '@/lib/logger';
@@ -12,8 +12,7 @@ export async function GET(request) {
   const requestId = request.headers.get('x-request-id') || crypto.randomUUID();
   
   try {
-    const { user, sess } = await requireAuth(request);
-    ensureTwoFa(sess, user);
+    const { user } = await requireAuth(request);
     
     const { searchParams } = new URL(request.url);
     const coinsParam = searchParams.get('coins');

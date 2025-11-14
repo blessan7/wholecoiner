@@ -189,10 +189,10 @@ export async function POST(request) {
       requestId,
     });
 
-    // Set session cookie (2FA not verified yet on login)
+    // Set session cookie
     try {
       logger.debug('[AUTH] Setting session cookie', { userId: user.id, requestId });
-      await setSession({ userId: user.id, twoFaVerified: false });
+      await setSession({ userId: user.id });
       logger.debug('[AUTH] Session cookie set successfully', { requestId });
     } catch (sessionError) {
       logger.error('[AUTH] Failed to set session cookie', {
@@ -213,7 +213,6 @@ export async function POST(request) {
         privyId: user.privyId,
         email: user.email,
         walletAddress: user.walletAddress,
-        twoFaEnabled: user.twoFaEnabled,
         createdAt: user.createdAt instanceof Date 
           ? user.createdAt.toISOString() 
           : user.createdAt,

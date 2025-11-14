@@ -1,4 +1,4 @@
-import { requireAuth, ensureTwoFa } from '@/lib/auth';
+import { requireAuth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { logger } from '@/lib/logger';
 import { ValidationError, AuthenticationError, AuthorizationError } from '@/lib/errors';
@@ -8,9 +8,8 @@ export async function GET(request) {
   let user = null;
 
   try {
-    const { user: authUser, sess } = await requireAuth(request);
+    const { user: authUser } = await requireAuth(request);
     user = authUser;
-    ensureTwoFa(sess, user);
 
     // Get query parameters
     const { searchParams } = new URL(request.url);

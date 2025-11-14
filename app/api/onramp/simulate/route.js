@@ -3,7 +3,7 @@
  * Simulate onramp by transferring mainnet SOL from app wallet to user wallet
  */
 
-import { requireAuth, ensureTwoFa } from '@/lib/auth';
+import { requireAuth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { logger } from '@/lib/logger';
 import { nanoid } from 'nanoid';
@@ -29,9 +29,8 @@ export async function POST(request) {
   let user = null;
   
   try {
-    const { user: authUser, sess } = await requireAuth(request);
+    const { user: authUser } = await requireAuth(request);
     user = authUser;
-    ensureTwoFa(sess, user);
     
     // Rate limiting
     if (!checkRateLimit(user.id, 5)) {

@@ -1,4 +1,4 @@
-import { requireAuth, ensureTwoFa } from '@/lib/auth';
+import { requireAuth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { logger } from '@/lib/logger';
 import { 
@@ -20,9 +20,8 @@ export async function GET(request, { params }) {
   let user = null;
   
   try {
-    const { user: authUser, sess } = await requireAuth(request);
+    const { user: authUser } = await requireAuth(request);
     user = authUser;
-    ensureTwoFa(sess, user);
     
     logger.info('Fetching goal', { userId: user.id, goalId, requestId });
     
@@ -129,9 +128,8 @@ export async function PATCH(request, { params }) {
   let user = null;
   
   try {
-    const { user: authUser, sess } = await requireAuth(request);
+    const { user: authUser } = await requireAuth(request);
     user = authUser;
-    ensureTwoFa(sess, user);
     
     const body = await request.json();
     

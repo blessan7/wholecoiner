@@ -3,11 +3,11 @@
  * Execute Jupiter swap: get quote and unsigned transaction, or submit signed transaction
  */
 
-import { requireAuth, ensureTwoFa } from '@/lib/auth';
+import { requireAuth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { logger } from '@/lib/logger';
 import { getSwapQuote, getSwapTransaction, submitSwapTransaction } from '@/lib/jupiter';
-import { getSolanaConnection, isValidSolanaAddress } from '@/lib/solana';
+import { getSolanaConnection, isValidSolanaAddress, checkATAExists, createATAWithAppWallet, isToken2022 } from '@/lib/solana';
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { getTokenMint, toSmallestUnits, fromSmallestUnits, getNetwork } from '@/lib/tokens';
 import { SwapErrors, AuthenticationError, AuthorizationError, ValidationError, SwapError } from '@/lib/errors';
@@ -26,9 +26,8 @@ export async function POST(request) {
   let user = null;
   
   try {
-    const { user: authUser, sess } = await requireAuth(request);
+    const { user: authUser } = await requireAuth(request);
     user = authUser;
-    ensureTwoFa(sess, user);
     
     const body = await request.json();
     const { 
@@ -39,6 +38,7 @@ export async function POST(request) {
       slippageBps,
       signedTransaction, // Optional: if provided, submit instead of getting quote
       quoteResponse, // Required when submitting signed transaction
+      lastValidBlockHeight, // Optional: for better confirmation reliability
       mode, // 'quote' or 'execute' (defaults based on signedTransaction presence)
     } = body;
     
@@ -71,6 +71,7 @@ export async function POST(request) {
         batchId,
         signedTransaction,
         quoteResponse,
+        lastValidBlockHeight,
         userId: user.id,
         requestId,
       });
@@ -104,6 +105,7 @@ export async function POST(request) {
         batchId,
         signedTransaction,
         quoteResponse,
+        lastValidBlockHeight,
         userId: user.id,
         requestId,
       });
@@ -308,15 +310,6 @@ async function getQuoteData({ goalId, batchId, inputMint, outputMint, slippageBp
     // Determine swap amount (use amount from ONRAMP transaction - should be USDC now)
     const swapAmount = onrampTransaction.amountCrypto; // USDC amount from onramp
     
-    // SAFETY: For testing, limit max swap amount to prevent accidental large transactions
-    const MAX_TEST_AMOUNT_USDC = 5; // Maximum 5 USDC for testing
-    if (swapAmount > MAX_TEST_AMOUNT_USDC) {
-      throw new ValidationError(
-        `Swap amount (${swapAmount} USDC) exceeds test limit (${MAX_TEST_AMOUNT_USDC} USDC). ` +
-        `This is a safety limit to prevent accidental large transactions during testing.`
-      );
-    }
-    
     const swapAmountInSmallestUnits = toSmallestUnits(swapAmount, inputTokenInfo.decimals);
       
     logger.info('Getting swap quote', { 
@@ -374,6 +367,71 @@ async function getQuoteData({ goalId, batchId, inputMint, outputMint, slippageBp
         requestId
       });
       // Continue with warning - actual swap will fail if insufficient, providing better error message
+    }
+    
+    // Check and create ATA for output token if needed (app wallet pays)
+    logger.info('Checking ATA for output token', {
+      outputMint: outputTokenInfo.mint,
+      userWallet: goalWithUser.user.walletAddress,
+      requestId
+    });
+    
+    try {
+      // Detect if this is a Token-2022 mint
+      const isToken2022Mint = await isToken2022(outputTokenInfo.mint);
+      
+      logger.debug('Token program detected', {
+        outputMint: outputTokenInfo.mint,
+        isToken2022: isToken2022Mint,
+        requestId
+      });
+      
+      // Check if ATA exists
+      const { exists: ataExists, address: ataAddress } = await checkATAExists(
+        outputTokenInfo.mint,
+        goalWithUser.user.walletAddress,
+        isToken2022Mint
+      );
+      
+      if (!ataExists) {
+        logger.info('ATA does not exist, creating with app wallet', {
+          outputMint: outputTokenInfo.mint,
+          userWallet: goalWithUser.user.walletAddress,
+          ataAddress: ataAddress.toBase58(),
+          requestId
+        });
+        
+        // Create ATA using app wallet as payer
+        const { signature, alreadyExists } = await createATAWithAppWallet(
+          outputTokenInfo.mint,
+          goalWithUser.user.walletAddress,
+          isToken2022Mint
+        );
+        
+        if (!alreadyExists) {
+          logger.info('ATA created successfully', {
+            signature,
+            ataAddress: ataAddress.toBase58(),
+            requestId
+          });
+        }
+      } else {
+        logger.debug('ATA already exists', {
+          ataAddress: ataAddress.toBase58(),
+          requestId
+        });
+      }
+    } catch (ataError) {
+      logger.error('Failed to ensure ATA exists', {
+        error: ataError.message,
+        outputMint: outputTokenInfo.mint,
+        userWallet: goalWithUser.user.walletAddress,
+        requestId
+      });
+      
+      throw new ValidationError(
+        `Failed to prepare token account for ${outputMint}. Please try again or contact support.`
+      );
     }
     
     // Get swap transaction (unsigned)
@@ -586,8 +644,8 @@ async function handleQuoteMode({ goalId, batchId, inputMint, outputMint, slippag
 /**
  * Handle execute mode (Step B)
  */
-async function handleExecuteMode({ goalId, batchId, signedTransaction, quoteResponse, userId, requestId }) {
-  logger.info('Submitting signed swap transaction', { goalId, batchId, requestId });
+async function handleExecuteMode({ goalId, batchId, signedTransaction, quoteResponse, lastValidBlockHeight, userId, requestId }) {
+  logger.info('Submitting signed swap transaction', { goalId, batchId, lastValidBlockHeight, requestId });
   
   // Get existing SWAP transaction (should be in QUOTED state)
   const existingSwap = await prisma.transaction.findFirst({
@@ -854,12 +912,12 @@ async function handleExecuteMode({ goalId, batchId, signedTransaction, quoteResp
   
   let signature;
   let blockhash;
-  let lastValidBlockHeight;
+  let lastValidBlockHeightFromTx;
   try {
-    const result = await submitSwapTransactionImmediate(signedTransaction, connection);
+    const result = await submitSwapTransactionImmediate(signedTransaction, connection, lastValidBlockHeight);
     signature = result.signature;
     blockhash = result.blockhash;
-    lastValidBlockHeight = result.lastValidBlockHeight;
+    lastValidBlockHeightFromTx = result.lastValidBlockHeight || lastValidBlockHeight;
   } catch (error) {
     // If submission fails, record as FAILED
     if (existingSwap) {
@@ -935,8 +993,8 @@ async function handleExecuteMode({ goalId, batchId, signedTransaction, quoteResp
   let confirmed = false;
   try {
     // Use blockhash confirmation if available, otherwise fall back to signature confirmation
-    if (blockhash && lastValidBlockHeight) {
-      confirmed = await confirmTransactionWithBlockhash(connection, signature, blockhash, lastValidBlockHeight, requestId);
+    if (blockhash && lastValidBlockHeightFromTx) {
+      confirmed = await confirmTransactionWithBlockhash(connection, signature, blockhash, lastValidBlockHeightFromTx, requestId);
     } else {
       // Fallback: confirm by signature only (less reliable but works)
       logger.info('Confirming transaction by signature only (no blockhash)', { signature, requestId });
@@ -1060,7 +1118,7 @@ async function handleExecuteMode({ goalId, batchId, signedTransaction, quoteResp
  * Validates transaction integrity and submits as-is (cannot modify signed transactions)
  * Jupiter quotes include fresh blockhashes, and auto-retry handles expired blockhashes
  */
-async function submitSwapTransactionImmediate(signedTransaction, connection) {
+async function submitSwapTransactionImmediate(signedTransaction, connection, lastValidBlockHeight = null) {
   try {
     // Validate transaction buffer (per help.txt)
     if (!signedTransaction || typeof signedTransaction !== 'string') {
@@ -1113,12 +1171,10 @@ async function submitSwapTransactionImmediate(signedTransaction, connection) {
       preflightCommitment: 'confirmed',
     });
     
-    // Get lastValidBlockHeight for confirmation (optional - will use blockhash confirmation)
-    const lastValidBlockHeight = null;
-    
     logger.info('Transaction submitted successfully', { 
       signature, 
       blockhash,
+      lastValidBlockHeight,
       bufferLength: txBuffer.length
     });
     

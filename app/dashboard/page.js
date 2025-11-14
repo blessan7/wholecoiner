@@ -3,8 +3,8 @@
 import { usePrivy } from '@privy-io/react-auth';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import HeaderPriceTicker from '@/components/HeaderPriceTicker';
 import UserProfileBadge from '@/components/UserProfileBadge';
+import HoldingsDetailModal from '@/components/HoldingsDetailModal';
 import { getWalletAddressFromPrivy } from '@/lib/user';
 
 const STATUS_STYLES = {
@@ -18,15 +18,16 @@ export default function Dashboard() {
   const router = useRouter();
   const { ready, authenticated, user, logout } = usePrivy();
 
-  const [checking2FA, setChecking2FA] = useState(true);
   const [userData, setUserData] = useState(null);
   const [goals, setGoals] = useState([]);
+  const [holdings, setHoldings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({
     totalBalance: 0,
     overallProgress: 0,
     activeGoals: 0,
   });
+  const [selectedHolding, setSelectedHolding] = useState(null);
 
   // Redirect unauthenticated users
   useEffect(() => {
@@ -35,25 +36,19 @@ export default function Dashboard() {
     }
   }, [ready, authenticated, router]);
 
-  // Check 2FA + load user/goals
+  // Load user data and goals after authentication
   useEffect(() => {
     if (ready && authenticated) {
-      check2FAStatus();
+      fetchUserAndGoals();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, authenticated]);
 
-  const check2FAStatus = async () => {
+  const fetchUserAndGoals = async () => {
     try {
       const response = await fetch('/api/user', { credentials: 'include' });
 
-      if (response.status === 403) {
-        const data = await response.json();
-        if (data.error?.reason === '2fa_required') {
-          router.push('/auth/2fa/verify');
-          return;
-        }
-      } else if (response.status === 401) {
+      if (response.status === 401) {
         router.push('/');
         return;
       } else if (response.ok) {
@@ -64,9 +59,8 @@ export default function Dashboard() {
         }
       }
     } catch (error) {
-      console.error('Error checking 2FA status:', error);
-    } finally {
-      setChecking2FA(false);
+      console.error('Error fetching user data:', error);
+      setLoading(false);
     }
   };
 
@@ -83,10 +77,27 @@ export default function Dashboard() {
           calculateStats(list);
         }
       }
+      
+      // Also fetch holdings
+      await fetchHoldings();
     } catch (err) {
       console.error('Error fetching goals:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchHoldings = async () => {
+    try {
+      const response = await fetch('/api/holdings', { credentials: 'include' });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          setHoldings(data.holdings || []);
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching holdings:', err);
     }
   };
 
@@ -144,7 +155,7 @@ export default function Dashboard() {
   }, [user?.linkedAccounts]);
 
   // Loading state
-  if (!ready || checking2FA || loading) {
+  if (!ready || loading) {
     return (
       <div className="min-h-screen w-full bg-[var(--bg-main)] bg-gradient-to-b from-[var(--bg-main)] via-[#17110b] to-[#120904] flex flex-col items-center justify-center text-[var(--text-primary)]">
         <div className="w-12 h-12 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin mb-4" />
@@ -177,6 +188,24 @@ export default function Dashboard() {
       minimumFractionDigits: 0,
       maximumFractionDigits: 2,
     }).format(Number(value || 0));
+
+  // Helper function to get token icon URL
+  const getTokenIcon = (coinSymbol) => {
+    const symbol = coinSymbol?.toUpperCase();
+    const iconMap = {
+      'BTC': 'https://assets.coingecko.com/coins/images/1/large/bitcoin.png',
+      'ETH': 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs/logo.png',
+      'SOL': 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
+      'USDC': 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png',
+      'USDT': 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.svg',
+      'JUP': 'https://static.jup.ag/jup/icon.png',
+      'RAY': 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R/logo.png',
+      'BONK': 'https://arweave.net/hQiPZOsRZXGXBJd_82PhVdlM_hACsT_q6wqwf5cSY7I',
+      'WIF': 'https://bafkreibk3covs5ltyqxa272uodhculbr6kea6betidfwy3ajsav2vjzyum.ipfs.nftstorage.link',
+      'PYTH': 'https://pyth.network/token.svg',
+    };
+    return iconMap[symbol] || null;
+  };
 
   const humanizeFrequency = (freq) => {
     if (!freq) return 'Flexible cadence';
@@ -313,40 +342,19 @@ export default function Dashboard() {
                   <span className="text-[var(--text-primary)] text-sm">
                   Dashboard
                 </span>
-                <button
-                  type="button"
-                    className="text-sm hover:text-[var(--accent)] transition-colors"
-                  onClick={() => router.push('/auth/2fa/setup')}
-                >
-                  Security
-                </button>
               </nav>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 text-xs text-[var(--text-secondary)]">
-            <span className="hidden rounded-full border border-[var(--border-subtle)] px-3 py-1 sm:inline-flex">
-              Secured 2FA
-            </span>
-            <button
-              className="rounded-full border border-[var(--border-subtle)] px-3 py-1 hover:text-[var(--accent)] transition-colors"
-              onClick={handleLogout}
-            >
-              Log out
-            </button>
-            <UserProfileBadge
-              displayName={userName}
-              walletAddress={walletAddress}
-              avatarUrl={avatarUrl}
-              size="sm"
-              orientation="horizontal"
-              className="bg-[#22160d] border-none shadow-none px-3 py-2"
-            />
-          </div>
-        </div>
-
-        <div className="mx-auto mt-6 max-w-6xl">
-          <HeaderPriceTicker />
+          <UserProfileBadge
+            displayName={userName}
+            walletAddress={walletAddress}
+            avatarUrl={avatarUrl}
+            size="sm"
+            orientation="horizontal"
+            onLogout={handleLogout}
+            className="bg-[#22160d] border-none shadow-none px-3 py-2"
+          />
         </div>
       </header>
 
@@ -421,6 +429,64 @@ export default function Dashboard() {
             </div>
           </section>
 
+          {/* Holdings */}
+          {holdings.length > 0 && (
+            <section className="space-y-6 rounded-3xl border border-[#292018] bg-[#17110b]/80 p-6 shadow-[0_30px_100px_rgba(0,0,0,0.65)] backdrop-blur-sm sm:p-8">
+              <div>
+                <h2 className="text-xl font-semibold text-[var(--text-primary)]">
+                  Your Holdings
+                </h2>
+                <p className="text-xs uppercase tracking-[0.26em] text-[var(--text-secondary)]">
+                  Tokens accumulated across all goals
+                </p>
+              </div>
+              
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {holdings.map((holding) => {
+                  const tokenIcon = getTokenIcon(holding.coin);
+                  return (
+                    <button
+                      type="button"
+                      key={holding.coin}
+                      onClick={() => setSelectedHolding(holding)}
+                      className="flex flex-col gap-3 rounded-2xl border border-[#292018] bg-[#150e08] p-6 text-left shadow-[0_18px_70px_rgba(0,0,0,0.45)] transition-transform duration-150 hover:-translate-y-1 hover:shadow-[0_26px_90px_rgba(0,0,0,0.6)]"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          {tokenIcon && (
+                            <img 
+                              src={tokenIcon} 
+                              alt={holding.coin}
+                              className="w-5 h-5 rounded-full"
+                              onError={(e) => { e.target.style.display = 'none'; }}
+                            />
+                          )}
+                          <span className="text-[0.62rem] uppercase tracking-[0.26em] text-[var(--text-secondary)]">
+                            {holding.coin}
+                          </span>
+                        </div>
+                        <span className="text-xs text-[var(--accent)]">
+                          {holding.goals.length} {holding.goals.length === 1 ? 'goal' : 'goals'}
+                        </span>
+                      </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-2xl font-semibold text-[var(--text-primary)]">
+                        {formatTokenAmount(holding.totalAmount, holding.coin)}
+                      </span>
+                      <span className="text-[0.62rem] uppercase tracking-[0.24em] text-[var(--text-secondary)]">
+                        {holding.swaps?.length || 0} swap{holding.swaps?.length === 1 ? '' : 's'}
+                      </span>
+                    </div>
+                    <span className="text-xs text-[var(--text-secondary)]">
+                      Total accumulated
+                    </span>
+                  </button>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
           {/* Goals */}
           <section className="space-y-6">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -441,7 +507,7 @@ export default function Dashboard() {
                 </button>
                 <button
                   className="rounded-full px-3 py-1 hover:text-[var(--accent)] transition-colors"
-                  onClick={() => router.push('/goals')}
+                  onClick={() => router.push('/dashboard')}
                 >
                   All goals
                 </button>
@@ -471,6 +537,13 @@ export default function Dashboard() {
           </section>
         </div>
       </main>
+
+      {selectedHolding && (
+        <HoldingsDetailModal
+          holding={selectedHolding}
+          onClose={() => setSelectedHolding(null)}
+        />
+      )}
 
       {/* Footer */}
       <footer className="relative z-10 w-full border-t border-[#292018] bg-[#0f0805]/70">

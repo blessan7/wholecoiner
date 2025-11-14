@@ -16,6 +16,20 @@ const POPULAR_SYMBOLS = [
   'PYTH',
 ];
 
+// Token icon mapping
+const TOKEN_ICONS = {
+  'BTC': 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/cbbtcf3aa214zXHbiAZQwf4122FBYbraNdFqgw4iMij/logo.png',
+  'ETH': 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs/logo.png',
+  'SOL': 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
+  'USDC': 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png',
+  'USDT': 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.svg',
+  'JUP': 'https://static.jup.ag/jup/icon.png',
+  'RAY': 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R/logo.png',
+  'BONK': 'https://arweave.net/hQiPZOsRZXGXBJd_82PhVdlM_hACsT_q6wqwf5cSY7I',
+  'WIF': 'https://bafkreibk3covs5ltyqxa272uodhculbr6kea6betidfwy3ajsav2vjzyum.ipfs.nftstorage.link',
+  'PYTH': 'https://pyth.network/token.svg',
+};
+
 /**
  * HeaderPriceTicker - Minimalist price ticker for dashboard header
  * Shows popular Jupiter tokens with live pricing
@@ -78,14 +92,6 @@ export default function HeaderPriceTicker() {
     };
   }, [fetchPrices]);
 
-  const trackRef = useRef(null);
-
-  const scrollTrack = (direction) => {
-    if (!trackRef.current) return;
-    const scrollAmount = 160 * direction;
-    trackRef.current.scrollBy({ left: scrollAmount, behavior: 'smooth' });
-  };
-
   const formatPrice = (price) => {
     if (!price || price === 0) return '0';
     
@@ -117,51 +123,44 @@ export default function HeaderPriceTicker() {
     );
   }
 
+  // Duplicate symbols for seamless loop
+  const displaySymbols = [...symbols, ...symbols];
+
   return (
     <div className="hidden min-w-0 flex-1 items-center justify-center md:flex">
-      <div className="relative flex w-full max-w-3xl items-center justify-center gap-3">
-        <button
-          type="button"
-          onClick={() => scrollTrack(-1)}
-          className="flex h-7 w-7 items-center justify-center rounded-full border border-[#2a1c11] bg-[#1a120a] text-[var(--text-secondary)] transition hover:text-[var(--accent)]"
-          aria-label="Scroll tokens left"
-        >
-          ‹
-        </button>
-
-        <div
-          ref={trackRef}
-          className="ticker-scroll flex w-full gap-3 overflow-x-auto scroll-smooth px-1 py-1"
-        >
-          {symbols.map((symbol) => {
+      <div className="relative w-full max-w-3xl overflow-hidden">
+        {/* Gradient overlays for fade effect */}
+        <div className="absolute left-0 top-0 z-10 h-full w-16 bg-gradient-to-r from-[var(--bg-main)] to-transparent pointer-events-none" />
+        <div className="absolute right-0 top-0 z-10 h-full w-16 bg-gradient-to-l from-[var(--bg-main)] to-transparent pointer-events-none" />
+        
+        {/* Auto-scrolling marquee */}
+        <div className="flex gap-3 animate-scroll">
+          {displaySymbols.map((symbol, index) => {
             const price = prices[symbol];
             if (!price) return null;
+            const iconUrl = TOKEN_ICONS[symbol];
 
             return (
               <div
-                key={symbol}
-                className="flex min-w-[150px] items-center justify-between rounded-full border border-[#2a1c11] bg-[#1d140c] px-4 py-2 text-xs text-white/70"
+                key={`${symbol}-${index}`}
+                className="flex min-w-[140px] items-center gap-2 rounded-full border border-[#2a1c11] bg-[#1d140c] px-3 py-2 text-xs text-white/70 transition-all duration-300 hover:border-[var(--accent)]/30 hover:bg-[#24160e]"
               >
-                <div className="flex flex-col leading-tight">
-                  <span className="text-sm font-semibold text-white">{symbol}</span>
-                  <span>${formatPrice(price)}</span>
+                {iconUrl && (
+                  <img 
+                    src={iconUrl} 
+                    alt={symbol}
+                    className="w-5 h-5 rounded-full flex-shrink-0"
+                    onError={(e) => { e.target.style.display = 'none'; }}
+                  />
+                )}
+                <div className="flex flex-col leading-tight min-w-0">
+                  <span className="text-xs font-semibold text-white truncate">{symbol}</span>
+                  <span className="text-[0.7rem] text-white/60">${formatPrice(price)}</span>
                 </div>
-                <span className="rounded-full bg-[#2a1d12] px-2 py-1 text-[0.6rem] font-medium uppercase tracking-[0.18em] text-white/45">
-                  —
-                </span>
               </div>
             );
           })}
         </div>
-
-        <button
-          type="button"
-          onClick={() => scrollTrack(1)}
-          className="flex h-7 w-7 items-center justify-center rounded-full border border-[#2a1c11] bg-[#1a120a] text-[var(--text-secondary)] transition hover:text-[var(--accent)]"
-          aria-label="Scroll tokens right"
-        >
-          ›
-        </button>
       </div>
     </div>
   );

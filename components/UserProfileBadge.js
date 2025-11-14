@@ -34,6 +34,7 @@ export default function UserProfileBadge({
   orientation = 'horizontal',
   size = 'md',
   showCopy = true,
+  onLogout,
   className = '',
 }) {
   const [copied, setCopied] = useState(false);
@@ -96,6 +97,15 @@ export default function UserProfileBadge({
             )}
           </div>
         </div>
+        {onLogout && (
+          <button
+            type="button"
+            onClick={onLogout}
+            className="mt-2 w-fit rounded-full border border-[#2a2016] px-3 py-1 text-[10px] uppercase tracking-[0.18em] text-[var(--text-secondary)] transition-colors hover:text-[var(--accent)]"
+          >
+            Log out
+          </button>
+        )}
       </div>
     </div>
   );

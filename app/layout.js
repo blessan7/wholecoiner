@@ -2,6 +2,7 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import PrivyProviderWrapper from "@/lib/privy-provider";
 import MaterialSymbolsLoader from "@/components/MaterialSymbolsLoader";
+import { ToastProvider } from "@/components/ToastContainer";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -22,7 +23,9 @@ export default function RootLayout({ children }) {
       >
         <MaterialSymbolsLoader />
         <PrivyProviderWrapper>
-          {children}
+          <ToastProvider>
+            {children}
+          </ToastProvider>
         </PrivyProviderWrapper>
       </body>
     </html>

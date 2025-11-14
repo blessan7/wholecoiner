@@ -3,7 +3,7 @@
  * Get investment status for a batch
  */
 
-import { requireAuth, ensureTwoFa } from '@/lib/auth';
+import { requireAuth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { logger } from '@/lib/logger';
 import { calculateProgress } from '@/lib/goalValidation';
@@ -54,8 +54,7 @@ export async function GET(request, { params }) {
   const { batchId } = await params;
 
   try {
-    const { user, sess } = await requireAuth(request);
-    ensureTwoFa(sess, user);
+    const { user } = await requireAuth(request);
 
     if (!batchId) {
       return Response.json({

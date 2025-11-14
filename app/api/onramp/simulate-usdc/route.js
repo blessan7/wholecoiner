@@ -3,18 +3,21 @@
  * Simulate USDC onramp by creating a database record only (no blockchain transaction)
  */
 
-import { requireAuth, ensureTwoFa } from '@/lib/auth';
+import { requireAuth } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { logger } from '@/lib/logger';
 import { nanoid } from 'nanoid';
-import { isValidSolanaAddress } from '@/lib/solana';
+import { isValidSolanaAddress, getSolanaConnection } from '@/lib/solana';
+import { PublicKey } from '@solana/web3.js';
 import { TOKEN_MINTS, getNetwork } from '@/lib/tokens';
 import { SwapErrors, AuthenticationError, AuthorizationError, ValidationError } from '@/lib/errors';
 import { ensureIdempotency } from '@/lib/idempotency';
 import { checkRateLimit } from '@/lib/rateLimit';
 import { sendInvestmentNotification } from '@/lib/notifications';
 
-const MIN_AMOUNT_USDC = 1; // Lowered for testing mode
+const MIN_AMOUNT_USDC = 0.00001; // Allow very small test amounts
+const SOL_FEE_BUFFER = 0.01; // Reserve 0.01 SOL for transaction fees and rent
+const APPROXIMATE_SOL_PRICE_USD = 100; // Rough estimate for SOL/USD conversion
 
 export async function POST(request) {
   const requestId = request.headers.get('x-request-id') || crypto.randomUUID();
@@ -25,12 +28,9 @@ export async function POST(request) {
     
     // Step 1: Authentication
     logger.debug('[ONRAMP] Authenticating user', { requestId });
-    const { user: authUser, sess } = await requireAuth(request);
+    const { user: authUser } = await requireAuth(request);
     user = authUser;
     logger.info('[ONRAMP] User authenticated', { userId: user.id, requestId });
-    
-    ensureTwoFa(sess, user);
-    logger.debug('[ONRAMP] 2FA verified', { userId: user.id, requestId });
     
     // Step 2: Rate limiting
     logger.debug('[ONRAMP] Checking rate limit', { userId: user.id, requestId });
@@ -132,6 +132,65 @@ export async function POST(request) {
       requestId 
     });
     
+    // Step 5.5: Validate SOL balance (user must have enough SOL to cover swap + fees)
+    logger.debug('[ONRAMP] Checking SOL balance', { 
+      walletAddress: user.walletAddress, 
+      requestId 
+    });
+    
+    const connection = getSolanaConnection();
+    const userPublicKey = new PublicKey(user.walletAddress);
+    
+    try {
+      const solBalance = await connection.getBalance(userPublicKey);
+      const solBalanceInSol = solBalance / 1e9; // Convert lamports to SOL
+      
+      // Estimate required SOL: approximate USD amount / SOL price + fee buffer
+      const estimatedSolNeeded = (amountUsdc / APPROXIMATE_SOL_PRICE_USD) + SOL_FEE_BUFFER;
+      
+      logger.info('[ONRAMP] SOL balance check', {
+        solBalance: solBalanceInSol,
+        estimatedSolNeeded,
+        amountUsdc,
+        requestId
+      });
+      
+      if (solBalanceInSol < estimatedSolNeeded) {
+        logger.error('[ONRAMP] Insufficient SOL balance', {
+          solBalance: solBalanceInSol,
+          required: estimatedSolNeeded,
+          shortfall: estimatedSolNeeded - solBalanceInSol,
+          requestId
+        });
+        
+        throw new ValidationError(
+          `Insufficient SOL balance. You have ${solBalanceInSol.toFixed(4)} SOL but need approximately ${estimatedSolNeeded.toFixed(4)} SOL ` +
+          `(${(amountUsdc / APPROXIMATE_SOL_PRICE_USD).toFixed(4)} SOL for swap + ${SOL_FEE_BUFFER} SOL for fees). ` +
+          `Please add more SOL to your wallet.`
+        );
+      }
+      
+      logger.debug('[ONRAMP] SOL balance sufficient', { 
+        solBalance: solBalanceInSol,
+        requestId 
+      });
+      
+    } catch (error) {
+      if (error instanceof ValidationError) {
+        throw error;
+      }
+      
+      logger.error('[ONRAMP] Failed to check SOL balance', {
+        error: error.message,
+        walletAddress: user.walletAddress,
+        requestId
+      });
+      
+      throw new ValidationError(
+        'Failed to verify SOL balance. Please ensure your wallet is properly connected and try again.'
+      );
+    }
+    
     // Step 6: Get network and USDC mint
     const network = getNetwork();
     const usdcMintInfo = TOKEN_MINTS.USDC;
@@ -186,6 +245,7 @@ export async function POST(request) {
               state: 'ONRAMP_CONFIRMED',
               simulation: true,
               simulated: true,
+              solValidated: true,
               userWalletAddress: user.walletAddress,
             },
           },
