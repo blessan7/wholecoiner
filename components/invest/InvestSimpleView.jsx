@@ -15,7 +15,7 @@ const MIN_INVEST_USDC = 0.00001;
  * Steps: amount → preparing → confirm → signing → executing → success
  * Uses friendly language (no technical jargon)
  */
-export default function InvestSimpleView({ goal, walletAddress, onSuccess }) {
+export default function InvestSimpleView({ goal, walletAddress, onSuccess, onStepChange }) {
   const router = useRouter();
   const solanaWallet = useSolanaWallet();
   const { addToast } = useToast();
@@ -48,6 +48,7 @@ export default function InvestSimpleView({ goal, walletAddress, onSuccess }) {
     setError('');
     setLoading(true);
     setStep('preparing');
+    onStepChange?.('preparing');
 
     try {
       const response = await fetch('/api/invest/prepare', {
@@ -66,13 +67,16 @@ export default function InvestSimpleView({ goal, walletAddress, onSuccess }) {
         setQuote(data.quote);
         setBatchId(data.batchId);
         setStep('confirm');
+        onStepChange?.('confirm');
       } else {
         setError(data.error?.message || 'Failed to prepare investment. Please try again.');
         setStep('amount');
+        onStepChange?.('amount');
       }
     } catch (err) {
       setError('Network error. Please try again.');
       setStep('amount');
+      onStepChange?.('amount');
     } finally {
       setLoading(false);
     }
@@ -87,12 +91,14 @@ export default function InvestSimpleView({ goal, walletAddress, onSuccess }) {
     setError('');
     setLoading(true);
     setStep('signing');
+    onStepChange?.('signing');
 
     try {
       // Sign the transaction
       const signedTx = await signSolanaTransaction(solanaWallet, quote.swapTransaction);
       
       setStep('executing');
+      onStepChange?.('executing');
 
       // Execute the investment
       const response = await fetch('/api/invest/execute', {
@@ -136,14 +142,17 @@ export default function InvestSimpleView({ goal, walletAddress, onSuccess }) {
         addToast(successMessage.title, 'success', 5000);
         
         setStep('success');
+        onStepChange?.('success');
         onSuccess?.();
       } else {
         setError(data.error?.message || 'Investment execution failed. Please try again.');
         setStep('confirm');
+        onStepChange?.('confirm');
       }
     } catch (err) {
       setError(err.message || 'Failed to complete investment. Please try again.');
       setStep('confirm');
+      onStepChange?.('confirm');
     } finally {
       setLoading(false);
     }
@@ -151,6 +160,7 @@ export default function InvestSimpleView({ goal, walletAddress, onSuccess }) {
 
   const handleInvestAgain = () => {
     setStep('amount');
+    onStepChange?.('amount');
     setQuote(null);
     setInvestmentResult(null);
     setError('');
@@ -267,6 +277,7 @@ export default function InvestSimpleView({ goal, walletAddress, onSuccess }) {
           <button
             onClick={() => {
               setStep('amount');
+              onStepChange?.('amount');
               setError('');
             }}
             className="flex-1 px-6 py-3 border border-[#292018] bg-[#120a05] text-[var(--text-primary)] rounded-lg font-semibold hover:bg-[#1b120a] transition-colors"

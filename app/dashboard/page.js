@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
 import UserProfileBadge from '@/components/UserProfileBadge';
 import HoldingsDetailModal from '@/components/HoldingsDetailModal';
 import DeleteGoalModal from '@/components/DeleteGoalModal';
+import InvestModal from '@/components/InvestModal';
 import { getWalletAddressFromPrivy } from '@/lib/user';
 
 const STATUS_STYLES = {
@@ -31,6 +32,8 @@ export default function Dashboard() {
   const [selectedHolding, setSelectedHolding] = useState(null);
   const [goalToDelete, setGoalToDelete] = useState(null);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [goalToInvest, setGoalToInvest] = useState(null);
+  const [showInvestModal, setShowInvestModal] = useState(false);
 
   // Redirect unauthenticated users
   useEffect(() => {
@@ -146,6 +149,21 @@ export default function Dashboard() {
   const handleCloseDeleteModal = () => {
     setShowDeleteModal(false);
     setGoalToDelete(null);
+  };
+
+  const handleShowInvestModal = (goal) => {
+    setGoalToInvest(goal);
+    setShowInvestModal(true);
+  };
+
+  const handleCloseInvestModal = () => {
+    setShowInvestModal(false);
+    setGoalToInvest(null);
+  };
+
+  const handleInvestSuccess = () => {
+    // Refresh goals to update progress
+    fetchUserAndGoals();
   };
 
   const handleDeleteGoal = async () => {
@@ -374,7 +392,7 @@ export default function Dashboard() {
           <button
             onClick={(e) => {
               e.stopPropagation();
-              router.push(`/goals/${goal.id}`);
+              handleShowInvestModal(goal);
             }}
             className="flex items-center gap-2 rounded-full bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-[#0d0804] shadow-[0_12px_40px_rgba(255,159,28,0.25)] transition-all hover:-translate-y-0.5 hover:shadow-[0_18px_50px_rgba(255,159,28,0.35)]"
           >
@@ -646,6 +664,15 @@ export default function Dashboard() {
           goalName={goalToDelete.coin}
         />
       )}
+
+      {/* Investment Modal */}
+      <InvestModal
+        isOpen={showInvestModal}
+        onClose={handleCloseInvestModal}
+        goal={goalToInvest}
+        walletAddress={walletAddress}
+        onSuccess={handleInvestSuccess}
+      />
 
       {/* Footer */}
       <footer className="relative z-10 w-full border-t border-[#292018] bg-[#0f0805]/70">
