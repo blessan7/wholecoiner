@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import UserProfileBadge from '@/components/UserProfileBadge';
 import HoldingsDetailModal from '@/components/HoldingsDetailModal';
+import DeleteGoalModal from '@/components/DeleteGoalModal';
 import { getWalletAddressFromPrivy } from '@/lib/user';
 
 const STATUS_STYLES = {
@@ -28,6 +29,8 @@ export default function Dashboard() {
     activeGoals: 0,
   });
   const [selectedHolding, setSelectedHolding] = useState(null);
+  const [goalToDelete, setGoalToDelete] = useState(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
 
   // Redirect unauthenticated users
   useEffect(() => {
@@ -135,6 +138,51 @@ export default function Dashboard() {
     }
   };
 
+  const handleShowDeleteModal = (goal) => {
+    setGoalToDelete(goal);
+    setShowDeleteModal(true);
+  };
+
+  const handleCloseDeleteModal = () => {
+    setShowDeleteModal(false);
+    setGoalToDelete(null);
+  };
+
+  const handleDeleteGoal = async () => {
+    if (!goalToDelete) return;
+    
+    const goalIdToDelete = goalToDelete.id;
+    const goalToRestore = goalToDelete;
+    
+    // Optimistic update: remove from UI immediately
+    setGoals(prevGoals => prevGoals.filter(g => g.id !== goalIdToDelete));
+    handleCloseDeleteModal();
+    
+    try {
+      const response = await fetch(`/api/goals/${goalIdToDelete}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        // Refresh to ensure backend sync and update stats
+        await fetchUserAndGoals();
+      } else {
+        // Restore goal if deletion failed
+        setGoals(prevGoals => [...prevGoals, goalToRestore]);
+        console.error('Failed to delete goal:', data.error?.message);
+        alert(data.error?.message || 'Failed to delete goal. Please try again.');
+      }
+    } catch (error) {
+      // Restore goal if network error
+      setGoals(prevGoals => [...prevGoals, goalToRestore]);
+      console.error('Error deleting goal:', error);
+      alert('Network error. Please try again.');
+    }
+  };
+
   const getUserName = () => {
     if (userData?.email) {
       const emailPrefix = userData.email.split('@')[0];
@@ -207,6 +255,17 @@ export default function Dashboard() {
     return iconMap[symbol] || null;
   };
 
+  // Token symbol icons (for goal cards)
+  const TOKEN_SYMBOL_ICONS = {
+    'BTC': '₿',
+    'ETH': 'Ξ',
+    'SOL': '◎'
+  };
+
+  const getTokenSymbolIcon = (coinSymbol) => {
+    return TOKEN_SYMBOL_ICONS[coinSymbol?.toUpperCase()] || '';
+  };
+
   const humanizeFrequency = (freq) => {
     if (!freq) return 'Flexible cadence';
     return freq.charAt(0) + freq.slice(1).toLowerCase();
@@ -229,6 +288,7 @@ export default function Dashboard() {
       goal.coin
     );
     const frequency = humanizeFrequency(goal.frequency);
+    const tokenSymbolIcon = getTokenSymbolIcon(goal.coin);
 
     const createdAt = goal.createdAt
       ? new Date(goal.createdAt).toLocaleDateString('en-US', {
@@ -241,20 +301,20 @@ export default function Dashboard() {
     return (
       <div
         key={goal.id}
-        onClick={() => router.push(`/goals/${goal.id}`)}
-        className="group relative flex h-full cursor-pointer flex-col gap-6 overflow-hidden rounded-3xl border border-[#292018] bg-[#17110b]/95 p-6 shadow-[0_28px_90px_rgba(0,0,0,0.65)] transition-transform duration-200 hover:-translate-y-1 hover:shadow-[0_40px_120px_rgba(0,0,0,0.8)]"
+        className="group relative flex h-full flex-col gap-6 overflow-hidden rounded-3xl border border-[#292018] bg-[#17110b]/95 p-6 shadow-[0_28px_90px_rgba(0,0,0,0.65)] transition-transform duration-200 hover:-translate-y-1 hover:shadow-[0_40px_120px_rgba(0,0,0,0.8)]"
       >
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-2 text-left">
             <p className="text-[10px] uppercase tracking-[0.24em] text-[var(--text-secondary)]">
+              {tokenSymbolIcon && <span className="mr-1.5">{tokenSymbolIcon}</span>}
               {goal.coin} accumulation
             </p>
             <h3 className="text-xl font-semibold text-[var(--text-primary)]">
-              Target {target}
+              <span className="text-[var(--accent)]">Target</span> {target}
             </h3>
           </div>
           <span
-            className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] ${statusStyle}`}
+            className={`rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.24em] ${statusStyle} ${goal.status === 'ACTIVE' ? 'shadow-[0_0_12px_rgba(16,185,129,0.3)]' : ''}`}
           >
             {goal.status}
           </span>
@@ -285,7 +345,7 @@ export default function Dashboard() {
 
         <div className="space-y-2">
           <div className="flex items-center justify-between text-xs text-[var(--text-secondary)]">
-            <span>{invested}</span>
+            <span>{invested} ({progress.toFixed(1)}% complete)</span>
             <span>{progress.toFixed(1)}%</span>
           </div>
           <div className="h-2.5 overflow-hidden rounded-full bg-[#24160e]">
@@ -294,13 +354,46 @@ export default function Dashboard() {
               style={{ width: `${progress}%` }}
             />
           </div>
+          {progress > 0 && (
+            <p className="text-xs text-[var(--text-secondary)] italic">
+              You're already {progress.toFixed(1)}% toward your goal. Keep going!
+            </p>
+          )}
         </div>
 
-        <div className="flex items-center justify-between text-xs text-[var(--text-secondary)]">
-          <span>Tap to view progress details</span>
-          <span className="text-[var(--accent)] transition-transform duration-200 group-hover:translate-x-0.5 group-hover:scale-105">
-            View goal →
-          </span>
+        <div className="flex items-center justify-between pt-2">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleShowDeleteModal(goal);
+            }}
+            className="text-xs text-red-400/70 hover:text-red-400 hover:underline transition-colors"
+          >
+            Delete Goal
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              router.push(`/goals/${goal.id}`);
+            }}
+            className="flex items-center gap-2 rounded-full bg-[var(--accent)] px-4 py-2 text-xs font-semibold text-[#0d0804] shadow-[0_12px_40px_rgba(255,159,28,0.25)] transition-all hover:-translate-y-0.5 hover:shadow-[0_18px_50px_rgba(255,159,28,0.35)]"
+          >
+            Invest Now
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-4 w-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2.5}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M13 7l5 5m0 0l-5 5m5-5H6"
+              />
+            </svg>
+          </button>
         </div>
       </div>
     );
@@ -542,6 +635,15 @@ export default function Dashboard() {
         <HoldingsDetailModal
           holding={selectedHolding}
           onClose={() => setSelectedHolding(null)}
+        />
+      )}
+
+      {showDeleteModal && goalToDelete && (
+        <DeleteGoalModal
+          isOpen={showDeleteModal}
+          onClose={handleCloseDeleteModal}
+          onConfirm={handleDeleteGoal}
+          goalName={goalToDelete.coin}
         />
       )}
 

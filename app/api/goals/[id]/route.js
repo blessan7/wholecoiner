@@ -235,3 +235,81 @@ export async function PATCH(request, { params }) {
     }, { status: 500 });
   }
 }
+
+/**
+ * DELETE /api/goals/:id
+ * Delete a goal
+ */
+export async function DELETE(request, { params }) {
+  const requestId = request.headers.get('x-request-id') || crypto.randomUUID();
+  const goalId = params.id;
+  let user = null;
+  
+  try {
+    const { user: authUser } = await requireAuth(request);
+    user = authUser;
+    
+    logger.info('Deleting goal', { userId: user.id, goalId, requestId });
+    
+    // Fetch goal with ownership check
+    const goal = await prisma.goal.findFirst({
+      where: { 
+        id: goalId,
+        userId: user.id // Multi-tenancy filter
+      }
+    });
+    
+    if (!goal) {
+      throw GoalErrors.GOAL_NOT_FOUND();
+    }
+    
+    // Delete the goal (cascade will handle related records if configured)
+    await prisma.goal.delete({
+      where: { id: goalId }
+    });
+    
+    logger.info('Goal deleted', { userId: user.id, goalId, requestId });
+    
+    return Response.json({
+      success: true,
+      message: 'Goal deleted successfully'
+    }, { status: 200 });
+    
+  } catch (error) {
+    logger.error('Goal deletion failed', { 
+      goalId, 
+      error: error.message,
+      errorName: error.name,
+      requestId 
+    });
+    
+    // Check if it's an Authentication or Authorization error
+    if (error instanceof AuthenticationError || error instanceof AuthorizationError) {
+      return Response.json({
+        success: false,
+        error: {
+          code: error.code || 'AUTH_ERROR',
+          message: error.message
+        }
+      }, { status: error.statusCode || 401 });
+    }
+    
+    if (error.statusCode) {
+      return Response.json({
+        success: false,
+        error: {
+          code: error.code,
+          message: error.message
+        }
+      }, { status: error.statusCode });
+    }
+    
+    return Response.json({
+      success: false,
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to delete goal'
+      }
+    }, { status: 500 });
+  }
+}

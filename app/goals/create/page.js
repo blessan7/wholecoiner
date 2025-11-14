@@ -43,7 +43,7 @@ const formatCurrency = (value) =>
 
 export default function CreateGoalPage() {
   const router = useRouter();
-  const { ready, authenticated, user } = usePrivy();
+  const { ready, authenticated, user, logout } = usePrivy();
   const { addToast } = useToast();
   const submitButtonRef = useRef(null);
   const [loading, setLoading] = useState(false);
@@ -241,6 +241,15 @@ export default function CreateGoalPage() {
     }
   };
 
+  const handleLogout = async () => {
+    try {
+      await logout();
+      router.push('/');
+    } catch (error) {
+      console.error('Logout failed:', error);
+    }
+  };
+
   const formatDate = (date) => {
     return new Intl.DateTimeFormat('en-US', {
       month: 'long',
@@ -312,6 +321,7 @@ export default function CreateGoalPage() {
               avatarUrl={avatarUrl}
               size="sm"
               orientation="horizontal"
+              onLogout={handleLogout}
               className="bg-[#22160d] border-none shadow-none px-3 py-2"
             />
           </div>

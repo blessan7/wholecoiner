@@ -189,3 +189,60 @@ button:focus-visible {
 .animate-glow {
   animation: glow 0.9s ease-out;
 }
+
+/* Card hover lift animation */
+@keyframes cardLift {
+  0% {
+    transform: translateY(0);
+  }
+  100% {
+    transform: translateY(-2px);
+  }
+}
+
+.card-hover-lift {
+  transition: transform 0.2s ease-out, box-shadow 0.2s ease-out;
+}
+
+.card-hover-lift:hover {
+  transform: translateY(-2px);
+}
+
+/* Progress bar glow animation */
+@keyframes progressGlow {
+  0%, 100% {
+    box-shadow: 0 0 0px rgba(255, 159, 28, 0);
+  }
+  50% {
+    box-shadow: 0 0 8px rgba(255, 159, 28, 0.4);
+  }
+}
+
+.progress-bar-glow {
+  animation: progressGlow 2s ease-in-out infinite;
+}
+
+/* Shine animation for Invest Now button */
+@keyframes shine {
+  0% {
+    background-position: -200% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
+}
+
+.btn-shine {
+  background: linear-gradient(
+    90deg,
+    var(--accent) 0%,
+    #ffb84d 50%,
+    var(--accent) 100%
+  );
+  background-size: 200% auto;
+  transition: background-position 0.5s ease;
+}
+
+.btn-shine:hover {
+  animation: shine 0.6s ease;
+}

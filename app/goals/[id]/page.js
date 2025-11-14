@@ -42,7 +42,7 @@ const formatDurationLabel = (estimate) => {
 
 export default function GoalProgressPage({ params, searchParams }) {
   const router = useRouter();
-  const { ready, authenticated, user } = usePrivy();
+  const { ready, authenticated, user, logout } = usePrivy();
   const { id: goalId } = use(params);
   const [progress, setProgress] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -147,6 +147,15 @@ export default function GoalProgressPage({ params, searchParams }) {
   const handleInvestSuccess = useCallback(() => {
     fetchProgress();
   }, [fetchProgress]);
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      router.push('/');
+    } catch (error) {
+      console.error('Logout failed:', error);
+    }
+  };
 
   const handlePauseGoal = async () => {
     if (!progress || actionLoading) return;
@@ -312,6 +321,7 @@ export default function GoalProgressPage({ params, searchParams }) {
             avatarUrl={avatarUrl}
             size="sm"
             orientation="horizontal"
+            onLogout={handleLogout}
             className="bg-[#22160d] border-none shadow-none px-3 py-2"
           />
         </div>
