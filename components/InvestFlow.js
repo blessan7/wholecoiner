@@ -270,6 +270,227 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
     }
   };
 
+  // Full investment flow: onramp → quote → sign → execute (all in one click for production)
+  const handleFullInvestmentFlow = async () => {
+    const numericAmount = Number(amountUsdc);
+    console.log('[InvestFlow] Starting full investment flow...', { goalId, amountUsdc: numericAmount, goalCoin });
+    
+    if (!numericAmount || Number.isNaN(numericAmount) || numericAmount < MIN_INVEST_USDC) {
+      const errorMsg = `Amount must be at least ${MIN_INVEST_USDC} USDC`;
+      setError(errorMsg);
+      return;
+    }
+
+    if (!goalId || !goalCoin) {
+      setError('Missing goal or coin information');
+      return;
+    }
+
+    if (!solanaWallet?.address) {
+      setError('Please connect your wallet first');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+    setCurrentStep('onramping');
+
+    try {
+      // Step 1: Onramp simulation
+      const newBatchId = crypto.randomUUID();
+      setBatchId(newBatchId);
+      
+      console.log('[InvestFlow] Step 1: Onramp simulation...');
+      const onrampResponse = await fetch('/api/onramp/simulate-usdc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          goalId,
+          amountUsdc: numericAmount,
+          batchId: newBatchId,
+        }),
+      });
+
+      const onrampData = await onrampResponse.json();
+      if (!onrampResponse.ok || !onrampData.success) {
+        throw new Error(onrampData.error?.message || 'Onramp simulation failed');
+      }
+
+      console.log('[InvestFlow] Step 1 complete: Onramp simulation successful');
+
+      // Step 2: Convert USDC to SOL amount (approximate: 1 SOL = 100 USDC)
+      const APPROXIMATE_SOL_PRICE_USD = 100;
+      const solAmount = numericAmount / APPROXIMATE_SOL_PRICE_USD;
+      console.log('[InvestFlow] Step 2: Converted', numericAmount, 'USDC to', solAmount, 'SOL');
+
+      // Step 3: Fetch goal coin token metadata
+      console.log('[InvestFlow] Step 3: Fetching goal coin token metadata for', goalCoin);
+      setCurrentStep('quoting');
+      
+      const tokenSearchResponse = await fetch(`/api/tokens/search?q=${encodeURIComponent(goalCoin)}&limit=10`);
+      const tokenSearchData = await tokenSearchResponse.json();
+      
+      if (!tokenSearchData.tokens || tokenSearchData.tokens.length === 0) {
+        throw new Error(`Token not found: ${goalCoin}`);
+      }
+
+      // Find exact symbol match (same logic as SwapCard)
+      const goalToken = tokenSearchData.tokens.find(token => 
+        token.symbol?.toUpperCase() === goalCoin.toUpperCase()
+      ) || tokenSearchData.tokens[0];
+
+      console.log('[InvestFlow] Step 3 complete: Found goal token', goalToken.symbol);
+
+      // Step 4: Get quote (SOL → Goal Coin) - using exact same logic as SwapCard
+      console.log('[InvestFlow] Step 4: Getting quote for', solAmount, 'SOL →', goalToken.symbol);
+      
+      // Convert fromAmount to smallest units (same as SwapCard)
+      const amountInSmallestUnits = Math.floor(
+        solAmount * Math.pow(10, 9) // SOL has 9 decimals
+      );
+      
+      const quoteResponse = await fetch('/api/swap/execute', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          goalId,
+          batchId: newBatchId,
+          inputMint: 'SOL',
+          outputMint: goalToken.symbol,
+          amount: amountInSmallestUnits,
+          mode: 'quote',
+          slippageBps: currentSlippageBps,
+        }),
+      });
+
+      const quoteData = await quoteResponse.json();
+      if (!quoteResponse.ok || !quoteData.success) {
+        throw new Error(quoteData.error?.message || 'Failed to get quote');
+      }
+
+      const quote = quoteData.quote;
+      const swapTransaction = quoteData.swapTransaction;
+      setQuote(quote);
+      setSwapTransaction(swapTransaction);
+      
+      console.log('[InvestFlow] Step 4 complete: Quote received');
+
+      // Step 5: Sign transaction (same as SwapCard)
+      console.log('[InvestFlow] Step 5: Signing transaction...');
+      setCurrentStep('signing');
+      
+      const signedTransactionSerialized = await signSolanaTransaction(solanaWallet, swapTransaction);
+      setSignedTx(signedTransactionSerialized);
+      
+      console.log('[InvestFlow] Step 5 complete: Transaction signed');
+
+      // Step 6: Execute swap (using EXACT same logic as SwapCard's executeSwap)
+      console.log('[InvestFlow] Step 6: Executing swap...');
+      setCurrentStep('executing');
+      
+      let executeResponse = await fetch('/api/swap/execute', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          goalId,
+          batchId: newBatchId,
+          signedTransaction: signedTransactionSerialized,
+          quoteResponse: quote,
+          mode: 'execute',
+        }),
+      });
+
+      let executeData = await executeResponse.json();
+
+      // Handle retryable errors (QUOTE_EXPIRED, SLIPPAGE_EXCEEDED) - exact same logic as SwapCard
+      if (!executeResponse.ok || !executeData.success) {
+        if (executeData.retryable && executeData.newQuote && executeData.newSwapTransaction) {
+          console.log('[InvestFlow] Retryable error detected, auto-retrying...', {
+            errorCode: executeData.error?.code,
+            newSlippageBps: executeData.newSlippageBps
+          });
+          
+          // Update quote and transaction
+          const newQuote = executeData.newQuote;
+          const newSwapTransaction = executeData.newSwapTransaction;
+          setQuote(newQuote);
+          setSwapTransaction(newSwapTransaction);
+          
+          // Update slippage if provided
+          if (executeData.newSlippageBps) {
+            setCurrentSlippageBps(executeData.newSlippageBps);
+          }
+          
+          // Auto-sign new transaction (same as SwapCard)
+          console.log('[InvestFlow] Auto-signing new transaction...');
+          const newSignedTx = await signSolanaTransaction(solanaWallet, newSwapTransaction);
+          setSignedTx(newSignedTx);
+          
+          // Auto-retry execution (same as SwapCard)
+          console.log('[InvestFlow] Auto-retrying execution with new signed transaction...');
+          executeResponse = await fetch('/api/swap/execute', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              goalId,
+              batchId: newBatchId,
+              signedTransaction: newSignedTx,
+              quoteResponse: newQuote,
+              lastValidBlockHeight: executeData.newLastValidBlockHeight,
+              mode: 'execute',
+            }),
+          });
+          
+          executeData = await executeResponse.json();
+        }
+      }
+
+      if (!executeResponse.ok || !executeData.success) {
+        throw new Error(executeData.error?.message || 'Swap execution failed');
+      }
+
+      console.log('[InvestFlow] Step 6 complete: Swap executed successfully');
+
+      // Step 7: Success!
+      setCurrentStep('complete');
+      showNotification('Investment successful!', 'success');
+      
+      // Get success message
+      const coin = goalCoin || goalInfo?.coin || 'BTC';
+      const coinAmount = executeData.btcAmount || executeData.amount || 0;
+      const successMessage = getInvestmentSuccessMessage(coin, coinAmount);
+      addToast(successMessage.title, 'success', 5000);
+      
+      // Launch celebration
+      launchCelebration();
+      
+      // Call onSuccess callback
+      if (onSuccess) {
+        onSuccess(executeData);
+      }
+
+      // Refresh goal progress
+      await fetchGoalProgress();
+
+    } catch (err) {
+      console.error('[InvestFlow] Full investment flow error:', err);
+      setError(err.message);
+      setCurrentStep('input');
+      
+      // Show error notification
+      showNotification(err.message || 'Investment failed', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Step 2: Get Quote
   const handleQuote = async (existingBatchId = null) => {
     const activeBatchId = existingBatchId || batchId;
@@ -1163,7 +1384,11 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
 
         <form onSubmit={(e) => { 
           e.preventDefault(); 
-          handleOnramp(debugMode); 
+          if (debugMode) {
+            handleOnramp(true); // Debug mode: just do onramp
+          } else {
+            handleFullInvestmentFlow(); // Production: full flow
+          }
         }} className="space-y-4">
           <div>
             <label htmlFor="amountUsdc" className="block text-sm font-medium text-black mb-2">
