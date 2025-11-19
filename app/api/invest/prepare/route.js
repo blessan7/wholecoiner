@@ -16,10 +16,9 @@ import { SwapErrors, AuthenticationError, ValidationError } from '@/lib/errors';
 import { ensureIdempotency } from '@/lib/idempotency';
 import { checkRateLimit } from '@/lib/rateLimit';
 
-const MIN_AMOUNT_USDC = 0.00001;
+const MIN_AMOUNT_SOL = 0.01;
 const SLIPPAGE_BPS = 50; // 0.5% slippage
 const SOL_FEE_BUFFER = 0.01;
-const APPROXIMATE_SOL_PRICE_USD = 100;
 
 export async function POST(request) {
   const requestId = request.headers.get('x-request-id') || crypto.randomUUID();
@@ -45,8 +44,8 @@ export async function POST(request) {
       throw new ValidationError('goalId is required');
     }
     
-    if (!amountUsd || typeof amountUsd !== 'number' || amountUsd < MIN_AMOUNT_USDC) {
-      throw new ValidationError(`amountUsd must be at least ${MIN_AMOUNT_USDC} USDC`);
+    if (!amountUsd || typeof amountUsd !== 'number' || amountUsd < MIN_AMOUNT_SOL) {
+      throw new ValidationError(`Amount must be at least ${MIN_AMOUNT_SOL} SOL`);
     }
     
     // Validate goal
@@ -78,9 +77,10 @@ export async function POST(request) {
     const userPublicKey = new PublicKey(goal.user.walletAddress);
     
     // Check SOL balance
+    // amountUsd is now treated as SOL amount
     const solBalance = await connection.getBalance(userPublicKey);
     const solBalanceInSol = solBalance / 1e9;
-    const estimatedSolNeeded = (amountUsd / APPROXIMATE_SOL_PRICE_USD) + SOL_FEE_BUFFER;
+    const estimatedSolNeeded = amountUsd + SOL_FEE_BUFFER;
     
     if (solBalanceInSol < estimatedSolNeeded) {
       throw new ValidationError(
@@ -90,7 +90,7 @@ export async function POST(request) {
     
     // Create onramp transaction
     const network = getNetwork();
-    const usdcMintInfo = TOKEN_MINTS.USDC;
+    const solMintInfo = TOKEN_MINTS.SOL;
     const simulatedSignature = `sim_${crypto.randomUUID().replace(/-/g, '')}`;
     
     const onrampTransaction = await ensureIdempotency(batchId, 'ONRAMP', async () => {
@@ -103,9 +103,9 @@ export async function POST(request) {
             provider: 'FAUCET',
             network: network === 'devnet' ? 'DEVNET' : 'MAINNET',
             txnHash: simulatedSignature,
-            amountUsd: amountUsd,
-            amountCrypto: amountUsd,
-            tokenMint: usdcMintInfo.mint,
+            amountUsd: amountUsd * 100, // Store USD equivalent for reporting (approximate)
+            amountCrypto: amountUsd, // Store actual SOL amount
+            tokenMint: solMintInfo.mint,
             meta: {
               state: 'ONRAMP_CONFIRMED',
               simulation: true,
@@ -118,10 +118,19 @@ export async function POST(request) {
       });
     });
     
-    // Step 2: Get quote
-    const inputTokenInfo = getTokenMint('USDC', 'mainnet');
+    // Step 2: Get quote (SOL → Goal Coin)
+    // amountUsd is now treated as SOL amount
+    const inputTokenInfo = getTokenMint('SOL', 'mainnet');
     const outputTokenInfo = getTokenMint(goal.coin, 'mainnet');
-    const swapAmountInSmallestUnits = toSmallestUnits(amountUsd, inputTokenInfo.decimals);
+    const swapAmountInSmallestUnits = toSmallestUnits(amountUsd, inputTokenInfo.decimals); // SOL has 9 decimals
+    
+    logger.info('[INVEST] Getting swap quote', {
+      amountSol: amountUsd,
+      swapAmountInSmallestUnits: swapAmountInSmallestUnits.toString(),
+      inputMint: inputTokenInfo.mint,
+      outputMint: outputTokenInfo.mint,
+      requestId
+    });
     
     // Check and create ATA for output token if needed (skip for native SOL)
     if (isNativeSOL(outputTokenInfo.mint)) {
@@ -184,16 +193,51 @@ export async function POST(request) {
       SLIPPAGE_BPS
     );
     
+    logger.info('[INVEST] Swap transaction received from Jupiter', {
+      hasSwapTransaction: !!swapData.swapTransaction,
+      swapTransactionLength: swapData.swapTransaction?.length,
+      lastValidBlockHeight: swapData.lastValidBlockHeight,
+      quoteId: quote.quoteId,
+      quoteExpiresAt: quote.expiresAt,
+      requestId
+    });
+    
     // Calculate output amount
     const outputAmount = fromSmallestUnits(quote.outAmount, outputTokenInfo.decimals);
     
     // Estimate fee (rough estimate: 0.0005 SOL ≈ $0.05 at $100/SOL)
     const estimatedFeeUsd = 0.05;
     
+    // Get current block height for comparison
+    let currentBlockHeight = null;
+    try {
+      const slot = await connection.getSlot('confirmed');
+      currentBlockHeight = slot;
+      const blocksRemaining = swapData.lastValidBlockHeight ? swapData.lastValidBlockHeight - currentBlockHeight : null;
+      
+      logger.info('[INVEST] Current block height', {
+        currentBlockHeight,
+        lastValidBlockHeight: swapData.lastValidBlockHeight,
+        blocksRemaining,
+        requestId
+      });
+    } catch (blockHeightError) {
+      logger.warn('[INVEST] Failed to get current block height', {
+        error: blockHeightError.message,
+        requestId
+      });
+    }
+    
     logger.info('[INVEST] Investment prepared', {
       batchId,
       amountUsd,
       outputAmount,
+      lastValidBlockHeight: swapData.lastValidBlockHeight,
+      currentBlockHeight,
+      blocksRemaining: currentBlockHeight && swapData.lastValidBlockHeight 
+        ? swapData.lastValidBlockHeight - currentBlockHeight 
+        : null,
+      quoteExpiresAt: quote.expiresAt,
       requestId
     });
     

@@ -4,6 +4,8 @@ import { prisma } from '@/lib/prisma';
 import { logger } from '@/lib/logger';
 import { getSolanaConnection, isValidSolanaAddress } from '@/lib/solana';
 import { ValidationError, formatErrorResponse } from '@/lib/errors';
+import { buildUnsignedTokenTransfer } from '@/lib/solana-token-transfer';
+import { getTokenMint } from '@/lib/tokens';
 import {
   LAMPORTS_PER_SOL,
   PublicKey,
@@ -130,7 +132,7 @@ export async function POST(request) {
 }
 
 async function handlePrepareMode({ body, batchId, requestId, adminUser }) {
-  const { fromUserId, fromAddress, toAddress, amountSol, memo } = body;
+  const { fromUserId, fromAddress, toAddress, amountSol, amount, tokenSymbol, mintAddress, sourceTokenAccount, memo } = body;
 
   if (!fromUserId && !fromAddress) {
     throw new ValidationError('fromUserId or fromAddress is required');
@@ -140,74 +142,174 @@ async function handlePrepareMode({ body, batchId, requestId, adminUser }) {
     throw new ValidationError('Valid toAddress is required');
   }
 
-  const solAmount = Number.parseFloat(amountSol);
-  if (!Number.isFinite(solAmount) || solAmount <= 0) {
-    throw new ValidationError('amountSol must be a positive number');
-  }
-
-  const lamports = Math.round(solAmount * LAMPORTS_PER_SOL);
-  if (!Number.isSafeInteger(lamports) || lamports <= 0) {
-    throw new ValidationError('amountSol converts to an invalid lamport value');
-  }
-
   const connection = getSolanaConnection();
-
   const { sourceUser, sourceAddress } = await resolveSourceWallet({
     fromUserId,
     fromAddress,
   });
 
-  const unsignedTransfer = await buildUnsignedTransfer({
-    connection,
-    sourceAddress,
-    destinationAddress: toAddress,
-    lamports,
-  });
+  // Check if this is a token transfer or SOL transfer
+  const isTokenTransfer = tokenSymbol || mintAddress || amount;
 
-  await upsertTransferRecord({
-    batchId,
-    adminUserId: adminUser.id,
-    sourceUserId: sourceUser?.id ?? null,
-    sourceAddress,
-    destinationAddress: toAddress,
-    lamports,
-    memo,
-    state: 'PREPARED',
-    metadata: {
-      feeEstimateLamports: unsignedTransfer.feeEstimateLamports,
-      lastValidBlockHeight: unsignedTransfer.lastValidBlockHeight,
-      recentBlockhash: unsignedTransfer.recentBlockhash,
-      preparedAt: new Date().toISOString(),
-    },
-  });
+  if (isTokenTransfer) {
+    // Token transfer
+    let mintAddr = mintAddress;
+    let decimals = null;
+    let tokenAmount = amount;
 
-  logger.info('Prepared internal SOL transfer', {
-    batchId,
-    requestId,
-    adminUserId: adminUser.id,
-    sourceUserId: sourceUser?.id,
-    sourceAddress,
-    destinationAddress: toAddress,
-    lamports,
-  });
+    if (tokenSymbol) {
+      // Get mint info from token symbol
+      const tokenInfo = getTokenMint(tokenSymbol);
+      mintAddr = tokenInfo.mint;
+      decimals = tokenInfo.decimals;
+    } else if (mintAddress) {
+      // Need to fetch decimals from the mint
+      try {
+        const mintInfo = await connection.getParsedAccountInfo(new PublicKey(mintAddress));
+        if (mintInfo.value && mintInfo.value.data.parsed) {
+          decimals = mintInfo.value.data.parsed.info.decimals;
+        } else {
+          throw new ValidationError('Could not fetch token decimals from mint address');
+        }
+      } catch (error) {
+        throw new ValidationError(`Failed to fetch token info: ${error.message}`);
+      }
+    } else {
+      throw new ValidationError('Either tokenSymbol or mintAddress is required for token transfers');
+    }
 
-  const transferPayload = formatTransferResponse({
-    sourceAddress,
-    destinationAddress: toAddress,
-    lamports,
-    memo,
-    ...unsignedTransfer,
-  });
+    if (!tokenAmount || Number.parseFloat(tokenAmount) <= 0) {
+      throw new ValidationError('amount must be a positive number for token transfers');
+    }
 
-  return Response.json(
-    {
-      success: true,
-      mode: 'prepare',
+    const unsignedTransfer = await buildUnsignedTokenTransfer({
+      fromAddress: sourceAddress,
+      toAddress,
+      mintAddress: mintAddr,
+      amount: tokenAmount,
+      decimals,
+      sourceTokenAccount,
+    });
+
+    await upsertTransferRecord({
       batchId,
-      transfer: transferPayload,
-    },
-    { status: 200 }
-  );
+      adminUserId: adminUser.id,
+      sourceUserId: sourceUser?.id ?? null,
+      sourceAddress,
+      destinationAddress: toAddress,
+      lamports: null, // Token transfers don't use lamports
+      memo,
+      state: 'PREPARED',
+      metadata: {
+        transferType: 'token',
+        tokenSymbol: tokenSymbol || null,
+        mintAddress: mintAddr,
+        amount: tokenAmount,
+        decimals,
+        sourceTokenAccount: sourceTokenAccount || null,
+        feeEstimateLamports: unsignedTransfer.feeEstimateLamports,
+        lastValidBlockHeight: unsignedTransfer.lastValidBlockHeight,
+        recentBlockhash: unsignedTransfer.recentBlockhash,
+        preparedAt: new Date().toISOString(),
+      },
+    });
+
+    logger.info('Prepared internal token transfer', {
+      batchId,
+      requestId,
+      adminUserId: adminUser.id,
+      sourceUserId: sourceUser?.id,
+      sourceAddress,
+      destinationAddress: toAddress,
+      mintAddress: mintAddr,
+      amount: tokenAmount,
+    });
+
+    return Response.json(
+      {
+        success: true,
+        mode: 'prepare',
+        batchId,
+        transfer: {
+          fromAddress: sourceAddress,
+          toAddress,
+          mintAddress: mintAddr,
+          amount: tokenAmount,
+          decimals,
+          memo: memo || null,
+          unsignedTransaction: unsignedTransfer.unsignedTransaction,
+          feeEstimateLamports: unsignedTransfer.feeEstimateLamports,
+          lastValidBlockHeight: unsignedTransfer.lastValidBlockHeight,
+          recentBlockhash: unsignedTransfer.recentBlockhash,
+        },
+      },
+      { status: 200 }
+    );
+  } else {
+    // SOL transfer (existing logic)
+    const solAmount = Number.parseFloat(amountSol);
+    if (!Number.isFinite(solAmount) || solAmount <= 0) {
+      throw new ValidationError('amountSol must be a positive number');
+    }
+
+    const lamports = Math.round(solAmount * LAMPORTS_PER_SOL);
+    if (!Number.isSafeInteger(lamports) || lamports <= 0) {
+      throw new ValidationError('amountSol converts to an invalid lamport value');
+    }
+
+    const unsignedTransfer = await buildUnsignedTransfer({
+      connection,
+      sourceAddress,
+      destinationAddress: toAddress,
+      lamports,
+    });
+
+    await upsertTransferRecord({
+      batchId,
+      adminUserId: adminUser.id,
+      sourceUserId: sourceUser?.id ?? null,
+      sourceAddress,
+      destinationAddress: toAddress,
+      lamports,
+      memo,
+      state: 'PREPARED',
+      metadata: {
+        transferType: 'sol',
+        feeEstimateLamports: unsignedTransfer.feeEstimateLamports,
+        lastValidBlockHeight: unsignedTransfer.lastValidBlockHeight,
+        recentBlockhash: unsignedTransfer.recentBlockhash,
+        preparedAt: new Date().toISOString(),
+      },
+    });
+
+    logger.info('Prepared internal SOL transfer', {
+      batchId,
+      requestId,
+      adminUserId: adminUser.id,
+      sourceUserId: sourceUser?.id,
+      sourceAddress,
+      destinationAddress: toAddress,
+      lamports,
+    });
+
+    const transferPayload = formatTransferResponse({
+      sourceAddress,
+      destinationAddress: toAddress,
+      lamports,
+      memo,
+      ...unsignedTransfer,
+    });
+
+    return Response.json(
+      {
+        success: true,
+        mode: 'prepare',
+        batchId,
+        transfer: transferPayload,
+      },
+      { status: 200 }
+    );
+  }
 }
 
 async function handleSubmitMode({ body, batchId, requestId, adminUser }) {

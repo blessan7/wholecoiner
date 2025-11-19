@@ -9,6 +9,7 @@ import SwapCard from './SwapCard';
 import { useToast } from './ToastContainer';
 import { launchCelebration } from '@/lib/celebration';
 import { getInvestmentSuccessMessage } from '@/lib/celebrationMessages';
+import CryptoTradeCardModal from './CryptoTradeCardModal';
 
 /**
  * Complete investment flow component
@@ -36,6 +37,7 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
   const [slippageRetryCount, setSlippageRetryCount] = useState(0); // Track slippage retry attempts
   const [currentSlippageBps, setCurrentSlippageBps] = useState(50); // Current slippage in basis points (default 0.5%)
   const [useSwapCard, setUseSwapCard] = useState(true); // Toggle to use new SwapCard UI
+  const [showCryptoTradeModal, setShowCryptoTradeModal] = useState(false);
   const MIN_INVEST_USDC = 0.00001;
   
   // Guard against React StrictMode double mounting in development
@@ -373,8 +375,22 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
 
       const quote = quoteData.quote;
       const swapTransaction = quoteData.swapTransaction;
+      const lastValidBlockHeight = quoteData.lastValidBlockHeight;
       setQuote(quote);
       setSwapTransaction(swapTransaction);
+      setLastValidBlockHeight(lastValidBlockHeight);
+      
+      // After quote received - log quote data
+      console.log('[InvestFlow] Quote data received', {
+        quoteId: quote.quoteId,
+        inputMint: quote.inputMint,
+        outputMint: quote.outputMint,
+        inAmount: quote.inAmount,
+        outAmount: quote.outAmount,
+        lastValidBlockHeight,
+        expiresAt: quote.expiresAt,
+        priceImpactPct: quote.priceImpactPct
+      });
       
       console.log('[InvestFlow] Step 4 complete: Quote received');
 
@@ -391,6 +407,18 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
       console.log('[InvestFlow] Step 6: Executing swap...');
       setCurrentStep('executing');
       
+      // Before execute - log execution parameters
+      console.log('[InvestFlow] Executing swap', {
+        batchId: newBatchId,
+        hasSignedTx: !!signedTransactionSerialized,
+        signedTxLength: signedTransactionSerialized?.length,
+        hasQuote: !!quote,
+        lastValidBlockHeight,
+        quoteId: quote.quoteId,
+        inputMint: quote.inputMint,
+        outputMint: quote.outputMint
+      });
+      
       let executeResponse = await fetch('/api/swap/execute', {
         method: 'POST',
         headers: {
@@ -401,18 +429,35 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
           batchId: newBatchId,
           signedTransaction: signedTransactionSerialized,
           quoteResponse: quote,
+          lastValidBlockHeight: lastValidBlockHeight,
           mode: 'execute',
         }),
       });
 
       let executeData = await executeResponse.json();
+      
+      // After execute response - log response details
+      console.log('[InvestFlow] Execute response', {
+        success: executeData.success,
+        retryable: executeData.retryable,
+        errorCode: executeData.error?.code,
+        errorMessage: executeData.error?.message,
+        state: executeData.state,
+        signature: executeData.signature,
+        pending: executeData.pending,
+        status: executeResponse.status
+      });
 
       // Handle retryable errors (QUOTE_EXPIRED, SLIPPAGE_EXCEEDED) - exact same logic as SwapCard
       if (!executeResponse.ok || !executeData.success) {
         if (executeData.retryable && executeData.newQuote && executeData.newSwapTransaction) {
           console.log('[InvestFlow] Retryable error detected, auto-retrying...', {
             errorCode: executeData.error?.code,
-            newSlippageBps: executeData.newSlippageBps
+            errorMessage: executeData.error?.message,
+            newSlippageBps: executeData.newSlippageBps,
+            hasNewQuote: !!executeData.newQuote,
+            hasNewSwapTransaction: !!executeData.newSwapTransaction,
+            newLastValidBlockHeight: executeData.newLastValidBlockHeight
           });
           
           // Update quote and transaction
@@ -427,12 +472,20 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
           }
           
           // Auto-sign new transaction (same as SwapCard)
-          console.log('[InvestFlow] Auto-signing new transaction...');
+          console.log('[InvestFlow] Auto-signing new transaction...', {
+            newQuoteId: newQuote.quoteId,
+            newInputMint: newQuote.inputMint,
+            newOutputMint: newQuote.outputMint
+          });
           const newSignedTx = await signSolanaTransaction(solanaWallet, newSwapTransaction);
           setSignedTx(newSignedTx);
           
           // Auto-retry execution (same as SwapCard)
-          console.log('[InvestFlow] Auto-retrying execution with new signed transaction...');
+          console.log('[InvestFlow] Auto-retrying execution with new signed transaction...', {
+            batchId: newBatchId,
+            hasNewSignedTx: !!newSignedTx,
+            newLastValidBlockHeight: executeData.newLastValidBlockHeight
+          });
           executeResponse = await fetch('/api/swap/execute', {
             method: 'POST',
             headers: {
@@ -449,6 +502,16 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
           });
           
           executeData = await executeResponse.json();
+          
+          // Log retry response
+          console.log('[InvestFlow] Retry execute response', {
+            success: executeData.success,
+            retryable: executeData.retryable,
+            errorCode: executeData.error?.code,
+            state: executeData.state,
+            signature: executeData.signature,
+            status: executeResponse.status
+          });
         }
       }
 
@@ -1327,6 +1390,7 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
   // Render based on current step
   if (currentStep === 'input') {
     return (
+      <>
       <div className="space-y-4">
         <h3 className="text-lg font-semibold text-black">Invest Now</h3>
         <p className="text-sm text-black">
@@ -1387,7 +1451,8 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
           if (debugMode) {
             handleOnramp(true); // Debug mode: just do onramp
           } else {
-            handleFullInvestmentFlow(); // Production: full flow
+            // Show floating window instead of directly starting flow
+            setShowCryptoTradeModal(true);
           }
         }} className="space-y-4">
           <div>
@@ -1440,12 +1505,24 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
           )}
         </form>
       </div>
+        {showCryptoTradeModal && (
+          <CryptoTradeCardModal
+            isOpen={showCryptoTradeModal}
+            onClose={() => setShowCryptoTradeModal(false)}
+            goalCoin={goalCoin}
+            goalId={goalId}
+            batchId={batchId}
+            userTokens={[]}
+          />
+        )}
+      </>
     );
   }
 
   // Show status component for ongoing investments
   if (batchId && currentStep !== 'input' && currentStep !== 'complete') {
     return (
+      <>
       <div className="space-y-4">
         <h3 className="text-lg font-semibold text-black">Investment in Progress</h3>
 
@@ -1637,12 +1714,24 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
           progressInfo={progressInfo}
         />
       </div>
+        {showCryptoTradeModal && (
+          <CryptoTradeCardModal
+            isOpen={showCryptoTradeModal}
+            onClose={() => setShowCryptoTradeModal(false)}
+            goalCoin={goalCoin}
+            goalId={goalId}
+            batchId={batchId}
+            userTokens={[]}
+          />
+        )}
+      </>
     );
   }
 
   // Complete state
   if (currentStep === 'complete') {
     return (
+      <>
       <div className="space-y-4">
         <div className="bg-green-50 border border-green-200 rounded-lg p-4">
           <h3 className="text-lg font-semibold text-green-800 mb-2">✓ Investment Complete!</h3>
@@ -1657,9 +1746,34 @@ export default function InvestFlow({ goalId, goalCoin, onSuccess }) {
           Make Another Investment
         </button>
       </div>
+        {showCryptoTradeModal && (
+          <CryptoTradeCardModal
+            isOpen={showCryptoTradeModal}
+            onClose={() => setShowCryptoTradeModal(false)}
+            goalCoin={goalCoin}
+            goalId={goalId}
+            batchId={batchId}
+            userTokens={[]}
+          />
+        )}
+      </>
     );
   }
 
-  return null;
+  return (
+    <>
+      {showCryptoTradeModal && (
+        <CryptoTradeCardModal
+          isOpen={showCryptoTradeModal}
+          onClose={() => setShowCryptoTradeModal(false)}
+          goalCoin={goalCoin}
+          goalId={goalId}
+          batchId={batchId}
+          userTokens={[]}
+        />
+      )}
+      {null}
+    </>
+  );
 }
 

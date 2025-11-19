@@ -364,7 +364,8 @@ async function getQuoteData({ goalId, batchId, inputMint, outputMint, amount, sl
       outputMint: outputTokenInfo.mint,
       amount: swapAmountInSmallestUnits,
       slippageBps: finalSlippageBps,
-      requestId 
+      requestId,
+      isNativeSOL: inputTokenInfo.mint === 'So11111111111111111111111111111111111111112'
     });
       
     // Get quote from Jupiter
@@ -374,6 +375,21 @@ async function getQuoteData({ goalId, batchId, inputMint, outputMint, amount, sl
       swapAmountInSmallestUnits.toString(),
       finalSlippageBps
     );
+    
+    // Verify quote response structure includes required fields
+    logger.info('Validating quote response structure', {
+      hasInputMint: !!quote.inputMint,
+      hasOutputMint: !!quote.outputMint,
+      hasOutAmount: !!quote.outAmount,
+      hasExpiresAt: !!quote.expiresAt,
+      hasQuoteId: !!quote.quoteId,
+      inputMint: quote.inputMint,
+      outputMint: quote.outputMint,
+      inAmount: quote.inAmount,
+      outAmount: quote.outAmount,
+      priceImpactPct: quote.priceImpactPct,
+      requestId
+    });
       
     // Get user wallet address (needed for swap transaction)
     // Note: We'll get it from the goal's user relation
@@ -523,11 +539,42 @@ async function getQuoteData({ goalId, batchId, inputMint, outputMint, amount, sl
     }
     
     // Get swap transaction (unsigned)
+    // Verify quote has inputMint before passing to getSwapTransaction
+    if (!quote.inputMint && inputTokenInfo.mint) {
+      // Ensure inputMint is set if not in quote response
+      quote.inputMint = inputTokenInfo.mint;
+    }
+    if (!quote.outputMint && outputTokenInfo.mint) {
+      // Ensure outputMint is set if not in quote response
+      quote.outputMint = outputTokenInfo.mint;
+    }
+    
+    // Swap transaction preparation
+    logger.info('Preparing swap transaction request', {
+      quoteId: quote.quoteId,
+      inputMint: quote.inputMint || inputTokenInfo.mint,
+      outputMint: quote.outputMint || outputTokenInfo.mint,
+      userWallet: goalWithUser.user.walletAddress,
+      slippageBps: finalSlippageBps,
+      inAmount: quote.inAmount,
+      outAmount: quote.outAmount,
+      requestId
+    });
+    
     const swapData = await getSwapTransaction(
       quote,
       goalWithUser.user.walletAddress,
       finalSlippageBps
     );
+    
+    // Validate swap transaction response
+    logger.info('Swap transaction response received', {
+      hasSwapTransaction: !!swapData.swapTransaction,
+      hasLastValidBlockHeight: !!swapData.lastValidBlockHeight,
+      swapTransactionLength: swapData.swapTransaction?.length,
+      lastValidBlockHeight: swapData.lastValidBlockHeight,
+      requestId
+    });
       
     // Calculate output amount in human-readable format
     const outputAmount = fromSmallestUnits(quote.outAmount, outputTokenInfo.decimals);
@@ -539,6 +586,7 @@ async function getQuoteData({ goalId, batchId, inputMint, outputMint, amount, sl
       priceImpact: quote.priceImpactPct,
       expiresAt: quote.expiresAt,
       quoteId: quote.quoteId,
+      lastValidBlockHeight: swapData.lastValidBlockHeight,
       requestId 
     });
     
@@ -1006,7 +1054,7 @@ async function handleExecuteMode({ goalId, batchId, signedTransaction, quoteResp
   let blockhash;
   let lastValidBlockHeightFromTx;
   try {
-    const result = await submitSwapTransactionImmediate(signedTransaction, connection, lastValidBlockHeight);
+    const result = await submitSwapTransactionImmediate(signedTransaction, connection, lastValidBlockHeight, requestId);
     signature = result.signature;
     blockhash = result.blockhash;
     lastValidBlockHeightFromTx = result.lastValidBlockHeight || lastValidBlockHeight;
@@ -1224,6 +1272,15 @@ async function handleExecuteMode({ goalId, batchId, signedTransaction, quoteResp
   // Confirm transaction using blockhash (sher-web approach) - more reliable than polling
   let confirmed = false;
   try {
+    // Confirmation method selection
+    logger.info('Selecting confirmation method', {
+      hasBlockhash: !!blockhash,
+      hasLastValidBlockHeight: !!lastValidBlockHeightFromTx,
+      willUseBlockhash: !!(blockhash && lastValidBlockHeightFromTx),
+      signature,
+      requestId
+    });
+    
     // Use blockhash confirmation if available, otherwise fall back to signature confirmation
     if (blockhash && lastValidBlockHeightFromTx) {
       confirmed = await confirmTransactionWithBlockhash(connection, signature, blockhash, lastValidBlockHeightFromTx, requestId);
@@ -1233,6 +1290,13 @@ async function handleExecuteMode({ goalId, batchId, signedTransaction, quoteResp
       await connection.confirmTransaction(signature, 'confirmed');
       confirmed = true;
     }
+    
+    // After confirmation - log result
+    logger.info('Transaction confirmation result', {
+      signature,
+      confirmed,
+      requestId
+    });
   } catch (error) {
     // Handle slippage errors with auto-requote (similar to quote expiration)
     if (error instanceof SwapError && error.code === 'SLIPPAGE_EXCEEDED') {
@@ -1356,6 +1420,15 @@ async function handleExecuteMode({ goalId, batchId, signedTransaction, quoteResp
     }
     
     // If confirmation fails (or auto-requote not possible), record as FAILED
+    logger.info('Updating transaction state in database - FAILED', {
+      transactionId: swapTxn.id,
+      oldState: swapTxn.meta?.state,
+      newState: 'FAILED',
+      error: error.message,
+      errorCode: error.code,
+      requestId
+    });
+    
     await prisma.transaction.update({
       where: { id: swapTxn.id },
       data: {
@@ -1377,6 +1450,14 @@ async function handleExecuteMode({ goalId, batchId, signedTransaction, quoteResp
   
   if (confirmed) {
     // Update to SWAP_CONFIRMED and update goal
+    logger.info('Updating transaction state in database - SWAP_CONFIRMED', {
+      transactionId: swapTxn.id,
+      oldState: swapTxn.meta?.state,
+      newState: 'SWAP_CONFIRMED',
+      signature,
+      requestId
+    });
+    
     const result = await prisma.$transaction(async (tx) => {
       const updatedTxn = await tx.transaction.update({
         where: { id: swapTxn.id },
@@ -1471,7 +1552,7 @@ async function handleExecuteMode({ goalId, batchId, signedTransaction, quoteResp
  * Validates transaction integrity and submits as-is (cannot modify signed transactions)
  * Jupiter quotes include fresh blockhashes, and auto-retry handles expired blockhashes
  */
-async function submitSwapTransactionImmediate(signedTransaction, connection, lastValidBlockHeight = null) {
+async function submitSwapTransactionImmediate(signedTransaction, connection, lastValidBlockHeight = null, requestId = null) {
   try {
     // Validate transaction buffer (per help.txt)
     if (!signedTransaction || typeof signedTransaction !== 'string') {
@@ -1483,15 +1564,16 @@ async function submitSwapTransactionImmediate(signedTransaction, connection, las
       throw new ValidationError('swapTransaction is not valid base64');
     }
     
+    // Before deserialization
+    logger.info('Deserializing swap transaction', { 
+      transactionLength: signedTransaction.length,
+      requestId 
+    });
+    
     const txBuffer = Buffer.from(signedTransaction, 'base64');
     if (!txBuffer || txBuffer.length === 0) {
       throw new ValidationError('Invalid signed transaction: empty buffer');
     }
-    
-    logger.info('Submitting transaction to Solana', { 
-      bufferLength: txBuffer.length,
-      stringLength: signedTransaction.length
-    });
     
     // Deserialize transaction (Jupiter returns VersionedTransaction)
     let transaction;
@@ -1502,7 +1584,8 @@ async function submitSwapTransactionImmediate(signedTransaction, connection, las
         error: deserializeError.message,
         bufferLength: txBuffer.length,
         stringLength: signedTransaction.length,
-        errorName: deserializeError.name
+        errorName: deserializeError.name,
+        requestId
       });
       throw new ValidationError(
         `Transaction deserialization failed: ${deserializeError.message}. ` +
@@ -1511,11 +1594,38 @@ async function submitSwapTransactionImmediate(signedTransaction, connection, las
       );
     }
     
+    // After deserialization - log transaction structure
+    const numInstructions = transaction.message?.compiledInstructions?.length || transaction.instructions?.length || 0;
+    const accountKeys = transaction.message?.staticAccountKeys?.map(k => k.toBase58()) || 
+                       transaction.accountKeys?.map(k => k.toBase58()) || [];
+    const recentBlockhash = transaction.message?.recentBlockhash?.toString() || null;
+    
+    logger.info('Transaction deserialized', {
+      numInstructions,
+      accountKeysCount: accountKeys.length,
+      accountKeys: accountKeys.slice(0, 10), // Log first 10 to avoid huge logs
+      recentBlockhash,
+      bufferLength: txBuffer.length,
+      requestId
+    });
+    
     // NOTE: Cannot modify signed transaction's blockhash - it invalidates the signature
     // Jupiter quotes already include fresh blockhashes when generated
     // If blockhash expires, the auto-retry mechanism will fetch a new quote
     // Extract blockhash from transaction for confirmation
     const blockhash = transaction.message.recentBlockhash?.toString() || null;
+    
+    // Before submission - log submission parameters
+    logger.info('Submitting transaction to Solana', {
+      blockhash,
+      lastValidBlockHeight,
+      skipPreflight: true,
+      maxRetries: 3,
+      preflightCommitment: 'confirmed',
+      bufferLength: txBuffer.length,
+      numInstructions,
+      requestId
+    });
     
     // Send transaction as-is (skipPreflight: true like sher-web for faster execution)
     const signature = await connection.sendRawTransaction(txBuffer, {
@@ -1528,7 +1638,9 @@ async function submitSwapTransactionImmediate(signedTransaction, connection, las
       signature, 
       blockhash,
       lastValidBlockHeight,
-      bufferLength: txBuffer.length
+      bufferLength: txBuffer.length,
+      numInstructions,
+      requestId
     });
     
     // Return signature and blockhash info for confirmation
@@ -1538,6 +1650,8 @@ async function submitSwapTransactionImmediate(signedTransaction, connection, las
       error: error.message,
       errorCode: error.code,
       errorName: error.name,
+      errorStack: error.stack,
+      requestId
     });
     
     // Handle blockhash-related errors
@@ -1561,7 +1675,22 @@ async function submitSwapTransactionImmediate(signedTransaction, connection, las
  */
 async function confirmTransactionWithBlockhash(connection, signature, blockhash, lastValidBlockHeight, requestId) {
   try {
-    logger.info('Confirming transaction', { signature, blockhash, lastValidBlockHeight, requestId });
+    // Before confirmation - get current blockheight for comparison
+    let currentBlockHeight = null;
+    try {
+      currentBlockHeight = await connection.getBlockHeight('confirmed');
+    } catch (blockHeightError) {
+      logger.warn('Failed to get current blockheight', { error: blockHeightError.message, requestId });
+    }
+    
+    logger.info('Starting transaction confirmation', {
+      signature,
+      blockhash,
+      lastValidBlockHeight,
+      currentBlockHeight,
+      blockheightDifference: currentBlockHeight && lastValidBlockHeight ? currentBlockHeight - lastValidBlockHeight : null,
+      requestId
+    });
     
     const res = await connection.confirmTransaction({
       signature,
@@ -1569,38 +1698,89 @@ async function confirmTransactionWithBlockhash(connection, signature, blockhash,
       lastValidBlockHeight,
     }, 'confirmed');
     
+    // After confirmation response - log response structure
+    logger.info('Confirmation response received', {
+      signature,
+      hasValue: !!res.value,
+      hasErr: !!res.value?.err,
+      err: res.value?.err,
+      slot: res.value?.slot,
+      confirmations: res.value?.confirmations,
+      requestId
+    });
+    
     const jupErr = res.value?.err;
     
     if (jupErr) {
-      logger.error('Transaction failed during confirmation', { signature, error: jupErr, requestId });
-      
-      // Parse Jupiter error codes from transaction error
+      // Error parsing - log error structure
       const errorObj = jupErr;
       const errorStr = JSON.stringify(errorObj);
       
+      logger.error('Transaction failed - parsing error details', {
+        signature,
+        errorObj: jupErr,
+        errorStr,
+        hasInstructionError: !!errorObj?.InstructionError,
+        instructionErrorType: Array.isArray(errorObj?.InstructionError) ? 'array' : typeof errorObj?.InstructionError,
+        instructionErrorLength: Array.isArray(errorObj?.InstructionError) ? errorObj.InstructionError.length : null,
+        requestId
+      });
+      
       // Extract Jupiter error code from InstructionError
       let jupiterErrorCode = null;
+      let instructionIndex = null;
+      let errorData = null;
       
       if (errorObj.InstructionError && Array.isArray(errorObj.InstructionError)) {
-        const instructionError = errorObj.InstructionError[1];
-        if (instructionError && instructionError.Custom) {
-          jupiterErrorCode = instructionError.Custom;
+        instructionIndex = errorObj.InstructionError[0];
+        errorData = errorObj.InstructionError[1];
+        
+        logger.info('Extracting Jupiter error code', {
+          signature,
+          instructionError: errorObj.InstructionError,
+          instructionIndex,
+          errorData,
+          hasCustom: !!errorData?.Custom,
+          customErrorCode: errorData?.Custom,
+          requestId
+        });
+        
+        if (errorData && errorData.Custom) {
+          jupiterErrorCode = errorData.Custom;
         }
       }
       
+      logger.error('Transaction failed during confirmation', {
+        signature,
+        error: jupErr,
+        instructionIndex,
+        jupiterErrorCode,
+        errorStr,
+        requestId
+      });
+      
       // Handle specific Jupiter error codes (like sher-web)
       if (jupiterErrorCode === 6025 || errorStr.includes('6025') || errorStr.includes('0x1789')) {
+        logger.warn('Jupiter slippage error detected (6025)', { signature, jupiterErrorCode, requestId });
         throw SwapErrors.SLIPPAGE_EXCEEDED(null);
       }
       
       if (jupiterErrorCode === 6001 || jupiterErrorCode === 6017 || 
           errorStr.includes('6001') || errorStr.includes('6017')) {
+        logger.warn('Jupiter slippage error detected (6001/6017)', { signature, jupiterErrorCode, requestId });
         throw SwapErrors.SLIPPAGE_EXCEEDED(null);
       }
       
       // Generic transaction failure
+      logger.error('Transaction failed with generic error', {
+        signature,
+        jupiterErrorCode,
+        instructionIndex,
+        errorStr,
+        requestId
+      });
       throw SwapErrors.SWAP_EXECUTION_FAILED(
-        `Transaction failed on-chain. ${jupiterErrorCode ? `Jupiter error code: ${jupiterErrorCode}. ` : ''}This may be due to slippage, insufficient liquidity, or price movement.`
+        `Transaction failed on-chain. ${jupiterErrorCode ? `Jupiter error code: ${jupiterErrorCode}. ` : ''}${instructionIndex !== null ? `Failed at instruction #${instructionIndex}. ` : ''}This may be due to slippage, insufficient liquidity, or price movement.`
       );
     }
     
@@ -1620,16 +1800,34 @@ async function confirmTransactionWithBlockhash(connection, signature, blockhash,
       errorStr.includes('expired');
     
     if (isBlockheightError) {
-      logger.warn('Transaction expired due to blockheight exceeded', { signature, requestId });
+      logger.warn('Transaction expired due to blockheight exceeded', {
+        signature,
+        error: error.message,
+        errorName: error.name,
+        requestId
+      });
       throw SwapErrors.QUOTE_EXPIRED();
     }
     
     // Re-throw SwapError instances
     if (error instanceof SwapError) {
+      logger.info('Re-throwing SwapError', {
+        signature,
+        errorCode: error.code,
+        errorMessage: error.message,
+        requestId
+      });
       throw error;
     }
     
     // Wrap other errors
+    logger.error('Transaction confirmation failed with unknown error', {
+      signature,
+      error: error.message,
+      errorName: error.name,
+      errorStack: error.stack,
+      requestId
+    });
     throw new Error(`Transaction confirmation failed: ${error.message || 'Unknown error'}`);
   }
 }
