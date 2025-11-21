@@ -8,6 +8,7 @@ import { useSolanaWallet, signSolanaTransaction } from '@/lib/solana-wallet';
 import { TOKEN_MINTS } from '@/lib/tokens';
 
 const SOL_MINT = TOKEN_MINTS.SOL.mint;
+const USDC_MINT = TOKEN_MINTS.USDC.mint;
 const BTC_MINT = TOKEN_MINTS.BTC.mint; // cbBTC mint
 
 // Jupiter Lite API endpoints
@@ -27,9 +28,11 @@ export default function TestSwapPage() {
   const [isSwapping, setIsSwapping] = useState(false);
   const [txSignature, setTxSignature] = useState(null);
   const [outputAmount, setOutputAmount] = useState(null);
+  const [swapType, setSwapType] = useState('SOL_BTC');
 
-  // Amount to swap (in SOL)
+  // Amount to swap
   const SOL_AMOUNT = 0.01; // 0.01 SOL
+  const USDC_AMOUNT = 1.1; // 1.0 USDC
 
   const handleSwapClick = async () => {
     try {
@@ -61,15 +64,43 @@ export default function TestSwapPage() {
         return;
       }
 
-      // 4. Build Jupiter Lite API quote request (SOL -> BTC)
-      setStatus('Fetching quote from Jupiter...');
+      // 4. Determine swap parameters based on swap type
+      let inputMint;
+      let outputMint;
+      let amount;
+      let inputDecimals;
+      let outputDecimals;
+      let inputSymbol;
+      let outputSymbol;
 
-      const amountLamports = Math.floor(SOL_AMOUNT * 1e9).toString(); // SOL has 9 decimals
+      if (swapType === 'USDC_SOL') {
+        inputMint = USDC_MINT;
+        outputMint = SOL_MINT;
+        amount = USDC_AMOUNT;
+        inputDecimals = TOKEN_MINTS.USDC.decimals; // 6
+        outputDecimals = TOKEN_MINTS.SOL.decimals; // 9
+        inputSymbol = 'USDC';
+        outputSymbol = 'SOL';
+      } else {
+        // SOL_BTC (default)
+        inputMint = SOL_MINT;
+        outputMint = BTC_MINT;
+        amount = SOL_AMOUNT;
+        inputDecimals = TOKEN_MINTS.SOL.decimals; // 9
+        outputDecimals = TOKEN_MINTS.BTC.decimals; // 8
+        inputSymbol = 'SOL';
+        outputSymbol = 'BTC';
+      }
+
+      // Build Jupiter Lite API quote request
+      setStatus(`Fetching quote from Jupiter (${inputSymbol} → ${outputSymbol})...`);
+
+      const amountInSmallestUnits = Math.floor(amount * Math.pow(10, inputDecimals)).toString();
 
       const quoteUrl = new URL(JUPITER_QUOTE_API);
-      quoteUrl.searchParams.set('inputMint', SOL_MINT);
-      quoteUrl.searchParams.set('outputMint', BTC_MINT);
-      quoteUrl.searchParams.set('amount', amountLamports);
+      quoteUrl.searchParams.set('inputMint', inputMint);
+      quoteUrl.searchParams.set('outputMint', outputMint);
+      quoteUrl.searchParams.set('amount', amountInSmallestUnits);
       quoteUrl.searchParams.set('slippageBps', '50'); // 0.50% slippage
 
       const quoteRes = await fetch(quoteUrl.toString());
@@ -85,14 +116,14 @@ export default function TestSwapPage() {
         throw new Error(
           quoteResponse.errorMessage || 
           quoteResponse.error ||
-          'Jupiter could not find a route for this swap.'
+          `Jupiter could not find a route for ${inputSymbol} → ${outputSymbol} swap.`
         );
       }
 
       // Calculate output amount for display
-      const btcAmount = Number(quoteResponse.outAmount) / Math.pow(10, TOKEN_MINTS.BTC.decimals);
-      setOutputAmount(btcAmount);
-      setStatus(`Quote received: ${btcAmount.toFixed(8)} BTC`);
+      const outputAmountValue = Number(quoteResponse.outAmount) / Math.pow(10, outputDecimals);
+      setOutputAmount(outputAmountValue);
+      setStatus(`Quote received: ${outputAmountValue.toFixed(outputDecimals === 9 ? 6 : 8)} ${outputSymbol}`);
 
       // 5. Build Jupiter Lite API swap request
       setStatus('Building swap transaction...');
@@ -181,13 +212,44 @@ export default function TestSwapPage() {
     <main className="min-h-screen flex items-center justify-center bg-[var(--bg-main)] p-4">
       <div className="w-full max-w-md rounded-2xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] p-6 shadow-lg">
         <h1 className="text-xl font-semibold mb-2 text-[var(--text-primary)]">
-          SOL → BTC Swap Test
+          Swap Test Page
         </h1>
 
+        {/* Swap Type Selector */}
+        <div className="mb-4">
+          <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">
+            Swap Type:
+          </label>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setSwapType('SOL_BTC')}
+              className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition ${
+                swapType === 'SOL_BTC'
+                  ? 'bg-[var(--accent)] text-[var(--bg-main)]'
+                  : 'bg-[var(--bg-main)] border border-[var(--border-subtle)] text-[var(--text-secondary)]'
+              }`}
+            >
+              SOL → BTC
+            </button>
+            <button
+              onClick={() => setSwapType('USDC_SOL')}
+              className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition ${
+                swapType === 'USDC_SOL'
+                  ? 'bg-[var(--accent)] text-[var(--bg-main)]'
+                  : 'bg-[var(--bg-main)] border border-[var(--border-subtle)] text-[var(--text-secondary)]'
+              }`}
+            >
+              USDC → SOL
+            </button>
+          </div>
+        </div>
+
         <p className="text-sm text-[var(--text-secondary)] mb-4">
-          This swaps <span className="font-mono font-semibold">{SOL_AMOUNT} SOL</span> into 
-          Wrapped BTC (cbBTC) on Solana using Jupiter Lite API. No swap UI is shown – it all happens 
-          after clicking the button.
+          {swapType === 'USDC_SOL' ? (
+            <>This swaps <span className="font-mono font-semibold">{USDC_AMOUNT} USDC</span> into SOL using Jupiter Lite API. No swap UI is shown – it all happens after clicking the button.</>
+          ) : (
+            <>This swaps <span className="font-mono font-semibold">{SOL_AMOUNT} SOL</span> into Wrapped BTC (cbBTC) on Solana using Jupiter Lite API. No swap UI is shown – it all happens after clicking the button.</>
+          )}
         </p>
 
         <div className="mb-4 text-sm space-y-2">
@@ -221,14 +283,21 @@ export default function TestSwapPage() {
                 : 'bg-[var(--accent)] hover:opacity-90 text-[var(--bg-main)]'
             }`}
         >
-          {isSwapping ? 'Swapping...' : `Swap ${SOL_AMOUNT} SOL → BTC`}
+          {isSwapping 
+            ? 'Swapping...' 
+            : swapType === 'USDC_SOL' 
+              ? `Swap ${USDC_AMOUNT} USDC → SOL`
+              : `Swap ${SOL_AMOUNT} SOL → BTC`
+          }
         </button>
 
         {outputAmount && (
           <div className="mt-4 p-3 rounded-lg bg-[var(--bg-main)] border border-[var(--border-subtle)]">
             <p className="text-sm text-[var(--text-primary)]">
               <span className="font-semibold">Expected output: </span>
-              <span className="font-mono">{outputAmount.toFixed(8)} BTC</span>
+              <span className="font-mono">
+                {outputAmount.toFixed(swapType === 'USDC_SOL' ? 6 : 8)} {swapType === 'USDC_SOL' ? 'SOL' : 'BTC'}
+              </span>
             </p>
           </div>
         )}
