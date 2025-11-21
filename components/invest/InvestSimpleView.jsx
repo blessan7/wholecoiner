@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useSolanaWallet, signSolanaTransaction } from '@/lib/solana-wallet';
 import { useToast } from '@/components/ToastContainer';
-import { useRouter } from 'next/navigation';
 import { useWallets } from '@privy-io/react-auth/solana';
 import { Connection } from '@solana/web3.js';
 import { launchCelebration } from '@/lib/celebration';
@@ -29,7 +28,6 @@ const SOL_MINT = TOKEN_MINTS.SOL.mint;
  * Uses friendly language (no technical jargon)
  */
 export default function InvestSimpleView({ goal, walletAddress, onSuccess, onStepChange }) {
-  const router = useRouter();
   const solanaWallet = useSolanaWallet();
   const { wallets, ready } = useWallets();
   const { addToast } = useToast();
@@ -545,12 +543,6 @@ export default function InvestSimpleView({ goal, walletAddress, onSuccess, onSte
           )}
 
           <div className="flex flex-col sm:flex-row gap-3">
-            <button
-              onClick={() => router.push(`/goals/${goal.id}`)}
-              className="flex-1 px-6 py-3 border border-[#292018] bg-[#120a05] text-[var(--text-primary)] rounded-lg font-semibold hover:bg-[#1b120a] transition-colors"
-            >
-              View Goal Summary
-            </button>
             <button
               onClick={handleInvestAgain}
               className="flex-1 bg-[var(--accent)] text-[#0d0804] px-6 py-3 rounded-lg font-semibold hover:opacity-90 transition-opacity animate-glow"

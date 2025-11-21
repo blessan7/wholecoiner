@@ -1,13 +1,10 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
-
 /**
  * GoalCard - Reusable goal card component
  * Displays goal title, status, amounts, progress bar, and completion percentage
  */
 export default function GoalCard({ goal }) {
-  const router = useRouter();
   
   const progressPercentage = goal.progressPercentage || 0;
   const status = goal.status || 'ACTIVE';
@@ -24,14 +21,9 @@ export default function GoalCard({ goal }) {
     return `${parseFloat(amount).toFixed(6)} ${coin}`;
   };
 
-  const handleClick = () => {
-    router.push(`/goals/${goal.id}`);
-  };
-
   return (
     <div
-      onClick={handleClick}
-      className="flex flex-col gap-4 rounded-lg border border-border-light bg-card-light p-6 shadow-soft transition-shadow hover:shadow-soft-md cursor-pointer dark:border-border-dark dark:bg-card-dark dark:shadow-none"
+      className="flex flex-col gap-4 rounded-lg border border-border-light bg-card-light p-6 shadow-soft transition-shadow hover:shadow-soft-md dark:border-border-dark dark:bg-card-dark dark:shadow-none"
     >
       <div className="flex items-center justify-between">
         <h3 className="font-bold text-text-primary-light dark:text-text-primary-dark">

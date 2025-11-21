@@ -1,6 +1,5 @@
 import { useMemo } from 'react';
 import { motion } from 'framer-motion';
-import Link from 'next/link';
 
 import ProgressBar from '@/components/ProgressBar';
 import {
@@ -59,10 +58,6 @@ export default function GoalListCard({ goal, onNavigate, onEdit, onPause }) {
     [goal]
   );
 
-  const handleViewDetails = () => {
-    onNavigate?.(goal.id);
-  };
-
   const handleEdit = () => {
     onEdit?.(goal.id);
   };
@@ -73,13 +68,13 @@ export default function GoalListCard({ goal, onNavigate, onEdit, onPause }) {
 
   const handleCardClick = (event) => {
     if (event.target.closest('button, a')) return;
-    handleViewDetails();
+    // Card click disabled - no navigation to details page
   };
 
   const handleKeyDown = (event) => {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      handleViewDetails();
+      // Card keyboard navigation disabled - no navigation to details page
     }
   };
 
@@ -133,14 +128,6 @@ export default function GoalListCard({ goal, onNavigate, onEdit, onPause }) {
           <div className="hidden w-full flex-col gap-3 pt-2 text-sm font-medium uppercase tracking-[0.18em] text-[var(--text-secondary)] sm:flex">
             <button
               type="button"
-              onClick={handleViewDetails}
-              className="flex items-center justify-center gap-2 rounded-full border border-[var(--border-subtle)] px-4 py-2 transition hover:border-[var(--accent)]/70 hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/80"
-            >
-              <span className="material-symbols-outlined text-base">visibility</span>
-              View Details
-            </button>
-            <button
-              type="button"
               onClick={handleEdit}
               className="flex items-center justify-center gap-2 rounded-full border border-[var(--border-subtle)] px-4 py-2 transition hover:border-[var(--accent)]/70 hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/80"
             >
@@ -159,13 +146,7 @@ export default function GoalListCard({ goal, onNavigate, onEdit, onPause }) {
         </div>
       </div>
 
-      <div className="mt-4 flex items-center justify-between sm:hidden">
-        <Link
-          href={`/goals/${goal.id}`}
-          className="inline-flex items-center gap-2 rounded-full border border-[var(--border-subtle)] px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-[var(--text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/80"
-        >
-          View
-        </Link>
+      <div className="mt-4 flex items-center justify-end sm:hidden">
         <button
           type="button"
           onClick={handleEdit}

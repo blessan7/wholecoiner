@@ -2,16 +2,14 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useRouter } from 'next/navigation';
 import InvestSimpleView from '@/components/invest/InvestSimpleView';
 
 /**
  * Investment Modal
  * Opens when user clicks "Invest Now" on a goal card
- * Contains the investment flow and a "View details" link
+ * Contains the investment flow
  */
 export default function InvestModal({ isOpen, onClose, goal, walletAddress, onSuccess }) {
-  const router = useRouter();
   const modalRef = useRef(null);
   const previousFocusRef = useRef(null);
   const amountInputRef = useRef(null);
@@ -75,11 +73,6 @@ export default function InvestModal({ isOpen, onClose, goal, walletAddress, onSu
 
   if (!isOpen || !goal) return null;
 
-  const handleViewDetails = () => {
-    onClose();
-    router.push(`/goals/${goal.id}`);
-  };
-
   const handleBackdropClick = (e) => {
     // Only close if clicking the backdrop itself, not modal content
     if (e.target === e.currentTarget) {
@@ -120,7 +113,7 @@ export default function InvestModal({ isOpen, onClose, goal, walletAddress, onSu
               aria-modal="true"
               aria-labelledby="invest-modal-title"
             >
-              {/* Header with close button and view details link */}
+              {/* Header with close button */}
               <div className="flex items-center justify-between mb-6">
                 <h2 
                   id="invest-modal-title"
@@ -128,37 +121,26 @@ export default function InvestModal({ isOpen, onClose, goal, walletAddress, onSu
                 >
                   Invest in this Goal
                 </h2>
-                <div className="flex items-center gap-4">
-                  {/* View details link */}
-                  <button
-                    onClick={handleViewDetails}
-                    className="text-sm text-[var(--text-secondary)] hover:text-[var(--accent)] transition-colors underline underline-offset-2 focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-2 focus:ring-offset-[#17110b] rounded"
-                    aria-label="View goal details page"
+                <button
+                  onClick={onClose}
+                  className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-2 focus:ring-offset-[#17110b] rounded p-1"
+                  aria-label="Close modal"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="h-5 w-5"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
                   >
-                    View details
-                  </button>
-                  {/* Close button */}
-                  <button
-                    onClick={onClose}
-                    className="text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent)] focus:ring-offset-2 focus:ring-offset-[#17110b] rounded p-1"
-                    aria-label="Close modal"
-                  >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      className="h-5 w-5"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M6 18L18 6M6 6l12 12"
-                      />
-                    </svg>
-                  </button>
-                </div>
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                </button>
               </div>
 
               {/* Investment flow content */}
@@ -170,7 +152,6 @@ export default function InvestModal({ isOpen, onClose, goal, walletAddress, onSu
                   onSuccess={() => {
                     onSuccess?.();
                     // Keep modal open after success to show celebration
-                    // User can close manually or click "View Goal Summary"
                   }}
                 />
               </div>
